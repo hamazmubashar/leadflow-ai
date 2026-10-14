@@ -1,13 +1,15 @@
 [project]
 name = "leadflow-ai"
-version = "0.1.0"
-description = "LeadFlow AI service (milestone M0: foundation)."
+version = "0.2.0"
+description = "LeadFlow AI: lead validation, local SQLite storage and an operator REST API."
 readme = "README.md"
 requires-python = "==3.12.*"
 dependencies = [
+    "alembic>=1.20,<1.21",
     "fastapi>=0.115",
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
+    "sqlalchemy>=2.1,<2.2",
     "uvicorn>=0.32",
 ]
 
@@ -51,8 +53,8 @@ warn_required_dynamic_aliases = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra --strict-markers --cov=leadflow_ai --cov-report=term-missing --cov-fail-under=90"
+addopts = "-ra --strict-markers --cov=src/leadflow_ai --cov-report=term-missing --cov-fail-under=90"
 
 [tool.coverage.run]
 branch = true
-source = ["leadflow_ai"]
+source = ["src/leadflow_ai"]

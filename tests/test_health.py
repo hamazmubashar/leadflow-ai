@@ -11,7 +11,7 @@ from tests.conftest import TEST_TOKEN
 def test_health_returns_status_and_version(client: TestClient) -> None:
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "version": "0.1.0"}
+    assert response.json() == {"status": "ok", "version": "0.2.0"}
 
 
 def test_health_does_not_require_auth(client: TestClient) -> None:

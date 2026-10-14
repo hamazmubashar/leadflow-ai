@@ -10,6 +10,12 @@
 secrets/
 credentials*.json
 
+# LeadFlow local SQLite database and its sidecar files
+leadflow.db
+leadflow.db-wal
+leadflow.db-shm
+leadflow.db-journal
+
 # Python
 __pycache__/
 *.py[cod]
