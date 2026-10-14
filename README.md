@@ -1,6 +1,9 @@
 # LeadFlow AI
 
-Milestone **M0**: the project foundation. It has a FastAPI service with a health endpoint, typed configuration, reusable operator authentication, and quality tooling. M0 has no database, lead logic, dashboard, or LLM.
+- **M0, foundation:** a FastAPI service with a health endpoint, typed configuration, reusable operator authentication, and quality tooling.
+- **M1, lead validation:** pure-Python validation and normalization of lead input.
+
+There's no database, dashboard, or LLM yet.
 
 ## Requirements
 
@@ -47,6 +50,36 @@ def thing(_: OperatorAuth) -> dict[str, str]: ...
 
 Requests must send `Authorization: Bearer <token>`. The token is compared using `hmac.compare_digest`.
 
+## Lead validation
+
+The `leadflow_ai.leads` package validates and normalizes raw lead data. It's pure Python with no network access.
+
+```python
+from leadflow_ai.leads import LeadValidationError, validate_lead
+
+lead = validate_lead(
+    {
+        "full_name": "  Ayesha   Khan ",
+        "email": "Ayesha.Khan@Example.COM",
+        "phone": "0300-1234567",  # PK mobile; other numbers need +countrycode
+        "source": "Web_Form",
+    }
+)
+lead.email  # 'ayesha.khan@example.com'
+lead.phone  # '+923001234567'
+lead.identity_keys()  # frozenset({'email:ayesha.khan@example.com', 'phone:+923001234567'})
+
+try:
+    validate_lead({"full_name": "", "phone": "021-12345678"})
+except LeadValidationError as exc:
+    for error in exc.errors:
+        print(error.field, error.code)
+    # phone phone.national_format_unsupported
+    # full_name field.required
+```
+
+Error messages never include the submitted values. Checks are structural only: a valid-looking email or phone number may still not exist. See [ADR 0002](docs/adr/0002-m1-lead-validation.md) for the full rules and limitations.
+
 ## Quality checks
 
 ```sh
@@ -61,7 +94,7 @@ The tests make no network calls.
 ## Layout
 
 ```
-src/leadflow_ai/   application package
+src/leadflow_ai/   application package (leads/: M1 validation)
 tests/             unit and integration tests
 docs/adr/          architectural decision records
 ```
