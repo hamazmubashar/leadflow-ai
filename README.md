@@ -9,6 +9,7 @@ A local-first service for collecting and validating sales leads.
 - **M4, lead scoring:** a 0–100 score with a hot/warm/cold tier, calculated on request from versioned TOML rules, with a per-rule explanation.
 - **M5, lead lifecycle:** each lead has a status (new, contacted, qualified, won, lost), changed through allowed transitions, with an append-only activity history.
 - **M6, response drafts:** generate an email draft for a lead from a fixed template, have a person approve or reject it, and record approved drafts in a **simulated** outbox.
+- **M8, workflow runs:** a fixed, versioned "new-lead outreach" workflow that scores new leads and prepares introduction drafts for hot ones, with a preview mode, run history and per-lead results. A run never approves or sends anything.
 - **M7, dashboard:** a Streamlit operator dashboard (dark navy and orange) that uses only the REST API: KPIs and charts, leads with details and status changes, CSV import, scoring, activity, draft review and the simulated outbox.
 
 Everything runs on your machine, and it uses no paid services or external APIs. There's no machine learning or LLM.
@@ -64,7 +65,7 @@ Alembic creates and upgrades the schema. The app never creates tables itself.
 
 ```sh
 uv run alembic upgrade head     # creates ./leadflow.db (or LEADFLOW_DATABASE_URL) and its tables
-uv run alembic current          # shows the applied revision, e.g. "0003 (head)"
+uv run alembic current          # shows the applied revision, e.g. "0004 (head)"
 ```
 
 - **Token:** migrations read only `LEADFLOW_DATABASE_URL`, so they don't need the operator token.
@@ -73,6 +74,7 @@ uv run alembic current          # shows the applied revision, e.g. "0003 (head)"
 - **Back up before upgrading.** Stop the server and copy `leadflow.db` (and any `leadflow.db-wal` / `leadflow.db-shm` files) before running `alembic upgrade head` on a database that has data.
 - **Upgrades are all-or-nothing.** Each upgrade runs in a single transaction: if any step fails, the database is left exactly as it was and `alembic current` still shows the previous revision.
 - **Upgrading to 0.5.0 (migration `0002`)** gives every existing lead the status `new` and one `lead_created` history event. Those events are **reconstructed** from each lead's stored `created_at`, because no history was recorded before M5. `uv run alembic downgrade 0001` removes the lifecycle data but keeps the leads.
+- **Upgrading to 0.7.0 (migration `0004`)** only adds the `workflow_runs` and `workflow_run_items` tables; existing tables and data are unchanged. `uv run alembic downgrade 0003` **permanently deletes the run history**; drafts created by runs are ordinary drafts and are kept.
 - **Upgrading to 0.6.0 (migration `0003`)** only adds the `lead_drafts` and `outbox_messages` tables; existing tables and data are unchanged. `uv run alembic downgrade 0002` **permanently deletes all drafts and outbox items** and keeps leads and their history, so back up first.
 
 ## Run the server
@@ -85,7 +87,7 @@ Add `--reload` while developing. The server listens on `http://127.0.0.1:8000`, 
 
 ```sh
 curl http://127.0.0.1:8000/health
-# {"status":"ok","version":"0.6.0"}
+# {"status":"ok","version":"0.7.0"}
 ```
 
 **`/health` doesn't check the database.** It only shows that the process is running. The app opens the database on the first lead request, so a healthy server can still answer lead requests with `503` (see [Database errors](#database-errors)).
@@ -114,6 +116,7 @@ bash scripts/dev.sh       # API on 127.0.0.1:8001, dashboard on http://127.0.0.1
 | CSV Import | Upload a file, see "imported N" or the rejected rows; template download | `POST /leads/import` |
 | Scoring | Every lead's score, tier and points per rule | score |
 | Activity | All events, filterable by lead and type | activity, drafts |
+| Workflows | Preview or run the new-lead outreach workflow (a live run needs a confirmation), run history, per-lead results | workflow runs |
 | Drafts | Generate a draft, read it, approve or reject it (the reviewer confirms they read it first) | drafts create/get/approve/reject |
 | Outbox | Simulated items with their message and draft. **Nothing is sent.** | outbox, draft |
 | System Health | API reachability, version, token and database checks | `/health`, lead list |
@@ -439,6 +442,54 @@ curl -X POST http://127.0.0.1:8000/api/v1/drafts/<draft_id>/reject \
 
 **The outbox.** `GET /api/v1/outbox?limit&offset` lists items newest first; `GET /api/v1/outbox/{id}` returns one. Every item's `status` is `simulated`. Its recipient, subject and body are those of the approved draft, which can never change afterwards: the database itself rejects edits to draft text, to decided drafts and to outbox items, and rejects deleting outbox items.
 
+### Workflow runs (M8)
+
+One fixed, versioned workflow, **new-lead outreach**. For each lead whose status is `new` and that no earlier live run of this workflow version has processed (oldest first, at most 500 per run):
+
+1. Score it with the current scoring rules.
+2. If it is **hot** and has an email address, create an *introduction* draft that **waits for human review** (M6).
+3. Otherwise record it as skipped, with a reason code.
+
+**A run never approves, rejects or sends anything.** Approving each draft stays a person's decision on the draft endpoints.
+
+**Start a run.** `mode` is required, so a live run never starts by default:
+
+```sh
+curl -X POST http://127.0.0.1:8000/api/v1/workflows/new-lead-outreach/runs \
+  -H "Authorization: Bearer $LEADFLOW_OPERATOR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"mode": "preview"}'
+```
+
+```json
+{"id": "7c1e...", "workflow": "new_lead_outreach", "workflow_version": "2026-10-15.1",
+ "rules_version": "2026-10-15.1", "mode": "preview", "status": "completed", "error_code": null,
+ "planned_count": 25,
+ "counts": {"draft_created": 0, "would_create_draft": 7, "skipped": 18, "failed": 0, "processed": 25},
+ "drafts_need_human_review": false, "started_at": "...", "finished_at": "..."}
+```
+
+- **`preview`** reports what a live run would do (`would_create_draft`) and **creates nothing**. Previews never count as processing, so a live run afterwards still sees every lead.
+- **`live`** creates the drafts (`draft_created`). Each lead is processed once per workflow version; leads that **failed** are retried by the next live run.
+- **The run happens inside the request** (no background worker) and returns when it finishes.
+- **One run at a time:** starting another returns `409 workflow.run_in_progress`, with the running run's `run_id` when it is known.
+
+**Results.** `GET /api/v1/workflow-runs` (newest first, `limit`/`offset`), `GET /api/v1/workflow-runs/{id}`, and `GET /api/v1/workflow-runs/{id}/items` for each lead's `outcome` (`draft_created`, `would_create_draft`, `skipped`, `failed`), `reason`, `score`, `tier` and `draft_id`. Results contain no names or contact details.
+
+| `reason` | Meaning |
+|---|---|
+| `not_hot` | the lead's tier isn't hot |
+| `no_email` | no email address, so no draft is possible |
+| `not_new` | the status changed after the run selected the lead |
+| `pending_draft_exists` | the lead already has a draft awaiting review |
+| `not_eligible` | the draft service refused the lead (M6 eligibility) |
+| `scoring_error` / `database_busy` / `concurrent_update` / `unexpected_error` | the lead failed; it is retried by the next live run |
+
+**Status of a run:**
+- `completed` means **every** planned lead has a stored result. The database refuses `completed` otherwise.
+- `failed` (`error_code: recording_failed`) means a result could not be saved and the run stopped.
+- `interrupted` (`stale_heartbeat`) means the server stopped mid-run. The next run marks it after 5 minutes without a heartbeat and continues with the leads it didn't reach. No lead ever gets a duplicate draft, because each draft is saved together with its result.
+
 ### Errors
 
 Most errors have the form `{"detail": {"code": "...", ...}}`. Depending on the error, `detail` also has a `message`, a list of `errors`, `row_errors`, or `conflicts`. Errors never include the values you sent.
@@ -447,13 +498,14 @@ Most errors have the form `{"detail": {"code": "...", ...}}`. Depending on the e
 |---|---|---|
 | `401` | none (`detail` is the string `"Invalid or missing bearer token"`) | missing or wrong token |
 | `404` | `lead.not_found` | no lead with that id (also for malformed ids) |
-| `404` | `draft.not_found` / `outbox.not_found` | no draft or outbox item with that id (also for malformed ids) |
+| `404` | `draft.not_found` / `outbox.not_found` / `workflow_run.not_found` | no draft, outbox item or workflow run with that id (also for malformed ids) |
 | `404` | none (`"Not Found"`) | unknown path, including a trailing slash such as `/api/v1/leads/` |
 | `409` | `lead.duplicate` | email or phone already stored |
 | `409` | `lead.status_conflict` | `expected_status` doesn't match the lead's current status |
 | `409` | `draft.lead_not_eligible` | creating or approving a draft for a lead that isn't `new`, `contacted` or `qualified`; includes `lead_status` and `eligible` |
 | `409` | `draft.pending_exists` | the lead already has a draft awaiting review |
 | `409` | `draft.already_decided` | the draft was already approved or rejected; includes `status` |
+| `409` | `workflow.run_in_progress` | another workflow run is running; includes `run_id` when known |
 | `413` | `request.too_large` | body over 16 KiB (16384 bytes); over 1 MiB (1048576 bytes) for CSV import |
 | `415` | `request.unsupported_media_type` | `Content-Type` missing or wrong: `application/json` for JSON bodies (creating leads and drafts, status changes, rejecting a draft), `text/csv` (UTF-8) for the import |
 | `422` | `lead.invalid` | field validation failed; `errors` lists each `field` and `code` |
@@ -556,11 +608,12 @@ src/leadflow_ai/
   api/             HTTP routes, request limits, error responses (M2)
   db/              SQLAlchemy models, engine/session, Alembic migrations (M2)
   services/        lead create/get/list, duplicate handling (M2), CSV batch import (M3),
-                   status changes (M5), drafts and the simulated outbox (M6)
+                   status changes (M5), drafts and the simulated outbox (M6), workflow runs (M8)
   imports/         CSV file reading and header checks (M3)
   scoring/         scoring rules (default_rules.toml), validation and the pure scoring engine (M4)
   lifecycle/       lead statuses and the allowed transitions (M5)
   drafts/          fixed email templates and draft statuses (M6)
+  workflows/       the fixed, versioned new-lead outreach workflow and its decision rule (M8)
   leads/           pure-Python validation and normalization (M1)
   main.py          application factory
 alembic.ini        Alembic configuration (the database URL comes from settings)
@@ -570,4 +623,4 @@ scripts/dev.sh     starts the API and the dashboard together
 docs/adr/          architectural decision records
 ```
 
-Design decisions: [ADR 0001](docs/adr/0001-m0-foundation.md) (foundation), [ADR 0002](docs/adr/0002-m1-lead-validation.md) (validation), [ADR 0003](docs/adr/0003-m2-database-and-api.md) (database and API), [ADR 0004](docs/adr/0004-m3-csv-import.md) (CSV import), [ADR 0005](docs/adr/0005-m4-lead-scoring.md) (lead scoring), [ADR 0006](docs/adr/0006-m5-lead-lifecycle.md) (lead lifecycle), [ADR 0007](docs/adr/0007-m6-drafts-and-simulated-outbox.md) (drafts and simulated outbox), [ADR 0008](docs/adr/0008-m7-dashboard.md) (dashboard).
+Design decisions: [ADR 0001](docs/adr/0001-m0-foundation.md) (foundation), [ADR 0002](docs/adr/0002-m1-lead-validation.md) (validation), [ADR 0003](docs/adr/0003-m2-database-and-api.md) (database and API), [ADR 0004](docs/adr/0004-m3-csv-import.md) (CSV import), [ADR 0005](docs/adr/0005-m4-lead-scoring.md) (lead scoring), [ADR 0006](docs/adr/0006-m5-lead-lifecycle.md) (lead lifecycle), [ADR 0007](docs/adr/0007-m6-drafts-and-simulated-outbox.md) (drafts and simulated outbox), [ADR 0008](docs/adr/0008-m7-dashboard.md) (dashboard), [ADR 0009](docs/adr/0009-m8-workflow-runs.md) (workflow runs).

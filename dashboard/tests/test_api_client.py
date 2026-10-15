@@ -460,3 +460,62 @@ def test_get_draft_and_outbox_endpoints() -> None:
 def test_an_outbox_item_that_is_not_simulated_is_rejected() -> None:
     client, _ = client_for(respond(200, {**OUTBOX, "status": "sent"}))
     assert raised(lambda: client.get_outbox_message("o1")).kind is ApiErrorKind.INVALID_RESPONSE
+
+
+RUN = {
+    "id": "r1",
+    "workflow": "new_lead_outreach",
+    "workflow_version": "2026-10-15.1",
+    "rules_version": "2026-10-15.1",
+    "mode": "preview",
+    "status": "completed",
+    "error_code": None,
+    "planned_count": 1,
+    "counts": {
+        "draft_created": 0,
+        "would_create_draft": 1,
+        "skipped": 0,
+        "failed": 0,
+        "processed": 1,
+    },
+    "drafts_need_human_review": False,
+    "started_at": "2026-10-15T12:00:00Z",
+    "finished_at": "2026-10-15T12:00:01Z",
+}
+
+
+def test_start_workflow_run_sends_the_mode_once() -> None:
+    client, session = client_for(respond(201, RUN))
+    run = client.start_workflow_run("preview")
+    call = session.calls[0]
+    assert (call["method"], call["url"], call["json"]) == (
+        "POST",
+        f"{BASE}/api/v1/workflows/new-lead-outreach/runs",
+        {"mode": "preview"},
+    )
+    assert run.counts.would_create_draft == 1
+
+
+def test_start_workflow_run_is_not_retried() -> None:
+    client, session = client_for(requests.ReadTimeout("slow"))
+    assert raised(lambda: client.start_workflow_run("live")).kind is ApiErrorKind.TIMEOUT
+    assert len(session.calls) == 1
+
+
+def test_run_history_and_items() -> None:
+    client, session = client_for(respond(200, {"items": [RUN], "limit": 100, "offset": 0}))
+    assert client.list_workflow_runs().items[0].id == "r1"
+    assert session.calls[0]["url"] == f"{BASE}/api/v1/workflow-runs"
+    item = {
+        "id": "i1",
+        "lead_id": "x",
+        "outcome": "skipped",
+        "reason": "not_hot",
+        "score": 55,
+        "tier": "warm",
+        "draft_id": None,
+        "created_at": "2026-10-15T12:00:00Z",
+    }
+    client, session = client_for(respond(200, {"items": [item], "limit": 100, "offset": 0}))
+    assert client.list_workflow_run_items("r/1").items[0].reason == "not_hot"
+    assert session.calls[0]["url"] == f"{BASE}/api/v1/workflow-runs/r%2F1/items"

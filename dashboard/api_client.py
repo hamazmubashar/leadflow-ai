@@ -27,12 +27,17 @@ from dashboard.models import (
     LeadStatus,
     OutboxMessage,
     OutboxPage,
+    RunMode,
     Score,
     StatusChange,
+    WorkflowRun,
+    WorkflowRunItemPage,
+    WorkflowRunPage,
 )
 
 CONNECT_TIMEOUT_SECONDS = 3.05
 MAX_PAGE_LIMIT = 100  # the API's maximum ``limit`` for every list endpoint
+WORKFLOW_START_PATH = "/api/v1/workflows/new-lead-outreach/runs"
 JsonObject = dict[str, Any]
 
 
@@ -232,6 +237,32 @@ class ApiClient:
             Draft,
             self._request("POST", f"/api/v1/drafts/{_segment(draft_id)}/reject", json=body),
         )
+
+    def start_workflow_run(self, mode: RunMode) -> WorkflowRun:
+        """``POST /api/v1/workflows/new-lead-outreach/runs``. Never retried.
+
+        A live run only creates drafts that wait for human review.
+        """
+        body = self._request("POST", WORKFLOW_START_PATH, json={"mode": mode})
+        return _validate(WorkflowRun, body)
+
+    def list_workflow_runs(
+        self, *, limit: int = MAX_PAGE_LIMIT, offset: int = 0
+    ) -> WorkflowRunPage:
+        body = self._request(
+            "GET", "/api/v1/workflow-runs", params={"limit": limit, "offset": offset}
+        )
+        return _validate(WorkflowRunPage, body)
+
+    def list_workflow_run_items(
+        self, run_id: str, *, limit: int = MAX_PAGE_LIMIT, offset: int = 0
+    ) -> WorkflowRunItemPage:
+        body = self._request(
+            "GET",
+            f"/api/v1/workflow-runs/{_segment(run_id)}/items",
+            params={"limit": limit, "offset": offset},
+        )
+        return _validate(WorkflowRunItemPage, body)
 
     def list_outbox(self, *, limit: int = MAX_PAGE_LIMIT, offset: int = 0) -> OutboxPage:
         """``GET /api/v1/outbox``: simulated items, newest first."""

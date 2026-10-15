@@ -28,6 +28,7 @@ from dashboard.views import (  # noqa: E402
     leads,
     outbox,
     scoring,
+    workflows,
 )
 
 st.set_page_config(
@@ -56,6 +57,9 @@ pages = {
     ),
     "activity": st.Page(
         activity.render, title="Activity", icon=":material/history:", url_path="activity"
+    ),
+    "workflows": st.Page(
+        workflows.render, title="Workflows", icon=":material/account_tree:", url_path="workflows"
     ),
     "drafts": st.Page(
         drafts.render, title="Drafts", icon=":material/edit_note:", url_path="drafts"

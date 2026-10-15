@@ -150,3 +150,54 @@ class Approval(_ApiModel):
 class ImportResult(_ApiModel):
     imported: int
     lead_ids: list[str]
+
+
+RunMode = Literal["preview", "live"]
+RunStatus = Literal["running", "completed", "failed", "interrupted"]
+ItemOutcome = Literal["draft_created", "would_create_draft", "skipped", "failed"]
+
+
+class RunCounts(_ApiModel):
+    draft_created: int
+    would_create_draft: int
+    skipped: int
+    failed: int
+    processed: int
+
+
+class WorkflowRun(_ApiModel):
+    id: str
+    workflow: str
+    workflow_version: str
+    rules_version: str
+    mode: RunMode
+    status: RunStatus
+    error_code: str | None
+    planned_count: int
+    counts: RunCounts
+    drafts_need_human_review: bool
+    started_at: datetime
+    finished_at: datetime | None
+
+
+class WorkflowRunPage(_ApiModel):
+    items: list[WorkflowRun]
+    limit: int
+    offset: int
+
+
+class WorkflowRunItem(_ApiModel):
+    id: str
+    lead_id: str
+    outcome: ItemOutcome
+    reason: str | None
+    score: int | None
+    tier: Tier | None
+    draft_id: str | None
+    created_at: datetime
+
+
+class WorkflowRunItemPage(_ApiModel):
+    items: list[WorkflowRunItem]
+    limit: int
+    offset: int
