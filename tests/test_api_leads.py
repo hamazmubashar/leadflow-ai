@@ -8,6 +8,8 @@ import pytest
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
+from leadflow_ai.api.drafts import outbox_router
+from leadflow_ai.api.drafts import router as drafts_router
 from leadflow_ai.api.leads import router as leads_router
 from leadflow_ai.auth import require_operator
 from leadflow_ai.main import create_app
@@ -70,8 +72,9 @@ def test_unauthenticated_requests_never_reach_body_parsing_or_storage(api: TestC
 
 
 def test_all_api_routes_declare_operator_auth(api: TestClient) -> None:
-    # Every operation the app serves under /api (per its OpenAPI schema) must be
-    # a leads-router route, and every leads-router route must depend on auth.
+    # Every operation the app serves under /api (per its OpenAPI schema) must be a
+    # route of one of these routers, and every one of their routes must depend on auth.
+    routers = (leads_router, drafts_router, outbox_router)
     served = {
         (method.upper(), path)
         for path, operations in api.get("/openapi.json").json()["paths"].items()
@@ -80,7 +83,8 @@ def test_all_api_routes_declare_operator_auth(api: TestClient) -> None:
     }
     routed = {
         (method, route.path)
-        for route in leads_router.routes
+        for router in routers
+        for route in router.routes
         if isinstance(route, APIRoute)
         for method in route.methods or set()
     }
@@ -95,12 +99,20 @@ def test_all_api_routes_declare_operator_auth(api: TestClient) -> None:
             ("GET", f"{LEADS}/{{lead_id}}/score"),
             ("POST", f"{LEADS}/{{lead_id}}/status"),
             ("GET", f"{LEADS}/{{lead_id}}/activity"),
+            ("POST", f"{LEADS}/{{lead_id}}/drafts"),
+            ("GET", f"{LEADS}/{{lead_id}}/drafts"),
+            ("GET", "/api/v1/drafts/{draft_id}"),
+            ("POST", "/api/v1/drafts/{draft_id}/approve"),
+            ("POST", "/api/v1/drafts/{draft_id}/reject"),
+            ("GET", "/api/v1/outbox"),
+            ("GET", "/api/v1/outbox/{message_id}"),
         }
     )
-    for route in leads_router.routes:
-        assert isinstance(route, APIRoute)
-        calls = {dependency.call for dependency in route.dependant.dependencies}
-        assert require_operator in calls, route.path
+    for router in routers:
+        for route in router.routes:
+            assert isinstance(route, APIRoute)
+            calls = {dependency.call for dependency in route.dependant.dependencies}
+            assert require_operator in calls, route.path
 
 
 # --- create and retrieve ------------------------------------------------------------

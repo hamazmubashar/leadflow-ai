@@ -315,8 +315,9 @@ def test_offline_script_applied_by_hand(
     if fail:
         assert after == before
     else:
-        assert after["version"] == [("0002",)]
+        assert after["version"] == [("0003",)]
         assert "status" in after["leads_columns"]
+        assert {"lead_drafts", "outbox_messages"} <= set(after["tables"])
         with sqlite3.connect(_path(database_url)) as check:
             assert check.execute("SELECT count(*) FROM lead_events").fetchone() == (len(LEAD_ROWS),)
 
@@ -352,7 +353,7 @@ def _scripts_with_0003(tmp_path: Path, body: str, *, fk_off: bool = True) -> Con
     for source in (MIGRATIONS_DIR / "versions").glob("*.py"):
         shutil.copy(source, scripts / "versions")
     (scripts / "versions" / "0003_test.py").write_text(
-        'import sqlalchemy as sa\nfrom alembic import op\n\nrevision = "0003"\n'
+        'import sqlalchemy as sa\nfrom alembic import op\n\nrevision = "test0003"\n'
         'down_revision = "0002"\nbranch_labels = None\ndepends_on = None\n\n\n'
         f"def upgrade() -> None:\n{body}\n\ndef downgrade() -> None:\n    pass\n",
         encoding="utf-8",
@@ -367,7 +368,7 @@ def _real_env_with_0003(tmp_path: Path, body: str) -> Config:
     extra = tmp_path / "extra_versions"
     extra.mkdir()
     (extra / "0003_test.py").write_text(
-        'import sqlalchemy as sa\nfrom alembic import op\n\nrevision = "0003"\n'
+        'import sqlalchemy as sa\nfrom alembic import op\n\nrevision = "test0003"\n'
         'down_revision = "0002"\nbranch_labels = None\ndepends_on = None\n\n\n'
         f"def upgrade() -> None:\n{body}\n\ndef downgrade() -> None:\n    pass\n",
         encoding="utf-8",
@@ -400,9 +401,9 @@ def test_leads_rebuild_succeeds_with_existing_event_references(
     alembic_config: Config, database_url: str, tmp_path: Path
 ) -> None:
     before = _at_0002_with_events(alembic_config, database_url)
-    command.upgrade(_real_env_with_0003(tmp_path, REBUILD_LEADS), "0003")
+    command.upgrade(_real_env_with_0003(tmp_path, REBUILD_LEADS), "test0003")
     after = _snapshot(database_url)
-    assert after["version"] == [("0003",)]
+    assert after["version"] == [("test0003",)]
     assert after["leads_columns"] == [*before["leads_columns"], "extra"]
     assert [row[:-1] for row in after["leads"]] == before["leads"]  # rows kept; extra is NULL
     assert _events(database_url) == before["events"]
@@ -423,7 +424,7 @@ def test_control_rebuild_fails_with_foreign_keys_enforced(
     """Proves the env.py change is needed: without it the same rebuild cannot run."""
     before = _at_0002_with_events(alembic_config, database_url)
     with pytest.raises(IntegrityError, match="FOREIGN KEY constraint failed"):
-        command.upgrade(_scripts_with_0003(tmp_path, REBUILD_LEADS, fk_off=False), "0003")
+        command.upgrade(_scripts_with_0003(tmp_path, REBUILD_LEADS, fk_off=False), "test0003")
     assert _snapshot(database_url) == {k: v for k, v in before.items() if k != "events"}
     assert _events(database_url) == before["events"]
 
@@ -433,7 +434,7 @@ def test_foreign_key_violation_rolls_back_the_whole_migration(
 ) -> None:
     before = _at_0002_with_events(alembic_config, database_url)
     with pytest.raises(RuntimeError) as exc_info:
-        command.upgrade(_real_env_with_0003(tmp_path, REBUILD_LEADS + ADD_ORPHAN_EVENT), "0003")
+        command.upgrade(_real_env_with_0003(tmp_path, REBUILD_LEADS + ADD_ORPHAN_EVENT), "test0003")
     assert type(exc_info.value).__name__ == "ForeignKeyViolationError"
     assert str(exc_info.value) == (
         "Migration rolled back: 1 foreign key violation(s) in lead_events"

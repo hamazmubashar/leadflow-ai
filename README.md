@@ -8,10 +8,11 @@ A local-first service for collecting and validating sales leads.
 - **M3, CSV import:** upload a CSV file of leads; every row is validated and the whole file is imported, or nothing is.
 - **M4, lead scoring:** a 0–100 score with a hot/warm/cold tier, calculated on request from versioned TOML rules, with a per-rule explanation.
 - **M5, lead lifecycle:** each lead has a status (new, contacted, qualified, won, lost), changed through allowed transitions, with an append-only activity history.
+- **M6, response drafts:** generate an email draft for a lead from a fixed template, have a person approve or reject it, and record approved drafts in a **simulated** outbox.
 
 Everything runs on your machine, and it uses no paid services or external APIs. There's no dashboard, machine learning, or LLM.
 
-> **LeadFlow AI does not send anything.** No emails, SMS, or other messages are sent, and there's no sending feature in M0–M5, real or simulated. It only stores and returns the leads you submit.
+> **LeadFlow AI does not send anything.** No emails, SMS, or other messages are ever sent. M6's outbox is **simulated**: approving a draft only records that it *would* be sent. There's no sending code, mail server setting, or delivery worker, and nothing contacts an external service.
 
 ## Requirements
 
@@ -62,7 +63,7 @@ Alembic creates and upgrades the schema. The app never creates tables itself.
 
 ```sh
 uv run alembic upgrade head     # creates ./leadflow.db (or LEADFLOW_DATABASE_URL) and its tables
-uv run alembic current          # shows the applied revision, e.g. "0002 (head)"
+uv run alembic current          # shows the applied revision, e.g. "0003 (head)"
 ```
 
 - **Token:** migrations read only `LEADFLOW_DATABASE_URL`, so they don't need the operator token.
@@ -71,6 +72,7 @@ uv run alembic current          # shows the applied revision, e.g. "0002 (head)"
 - **Back up before upgrading.** Stop the server and copy `leadflow.db` (and any `leadflow.db-wal` / `leadflow.db-shm` files) before running `alembic upgrade head` on a database that has data.
 - **Upgrades are all-or-nothing.** Each upgrade runs in a single transaction: if any step fails, the database is left exactly as it was and `alembic current` still shows the previous revision.
 - **Upgrading to 0.5.0 (migration `0002`)** gives every existing lead the status `new` and one `lead_created` history event. Those events are **reconstructed** from each lead's stored `created_at`, because no history was recorded before M5. `uv run alembic downgrade 0001` removes the lifecycle data but keeps the leads.
+- **Upgrading to 0.6.0 (migration `0003`)** only adds the `lead_drafts` and `outbox_messages` tables; existing tables and data are unchanged. `uv run alembic downgrade 0002` **permanently deletes all drafts and outbox items** and keeps leads and their history, so back up first.
 
 ## Run the server
 
@@ -82,7 +84,7 @@ Add `--reload` while developing. The server listens on `http://127.0.0.1:8000`, 
 
 ```sh
 curl http://127.0.0.1:8000/health
-# {"status":"ok","version":"0.5.0"}
+# {"status":"ok","version":"0.6.0"}
 ```
 
 **`/health` doesn't check the database.** It only shows that the process is running. The app opens the database on the first lead request, so a healthy server can still answer lead requests with `503` (see [Database errors](#database-errors)).
@@ -97,7 +99,7 @@ Load the token into your shell first. `set -a` exports every variable defined in
 set -a; . ./.env; set +a
 ```
 
-Every `/api/v1/leads` request needs `Authorization: Bearer $LEADFLOW_OPERATOR_TOKEN`. Requests that send a body also need `Content-Type: application/json`.
+Every `/api/v1/...` request needs `Authorization: Bearer $LEADFLOW_OPERATOR_TOKEN`. Requests that send a body also need `Content-Type: application/json`.
 
 ### Create a lead: `POST /api/v1/leads`
 
@@ -339,6 +341,64 @@ curl "http://127.0.0.1:8000/api/v1/leads/<id>/activity?limit=50&offset=0" \
 - **No per-person attribution:** with one shared token, the history can't record *who* made a change.
 - **Not shown elsewhere:** existing lead responses (create, get, list, import) don't include the status. Use the activity endpoint.
 
+### Response drafts and the simulated outbox
+
+A **draft** is an email for one lead, rendered from a fixed template. A person reviews it, then **approves** or **rejects** it. Approving records an item in the **simulated outbox**; nothing is sent.
+
+| Status | Meaning | Next |
+|---|---|---|
+| `pending_review` | awaiting review (new drafts start here) | `approved` or `rejected` |
+| `approved` | approved; has exactly one outbox item | none (final) |
+| `rejected` | rejected, with an optional reason | none (final) |
+
+**Create a draft.** `template` is `introduction` or `follow_up`.
+
+```sh
+curl -X POST http://127.0.0.1:8000/api/v1/leads/<id>/drafts \
+  -H "Authorization: Bearer $LEADFLOW_OPERATOR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"template": "introduction"}'
+```
+
+```json
+{"id": "5d0a...", "lead_id": "2f1c...", "template": "introduction", "template_version": "2026-10-15.1",
+ "channel": "email", "recipient": "ayesha.khan@example.com", "subject": "Introduction for Acme Traders",
+ "body": "Hello Ayesha Khan,\n\nThank you for getting in touch on behalf of Acme Traders. ...",
+ "status": "pending_review", "rejection_reason": null, "created_at": "2026-10-15T12:00:00.123456Z", "decided_at": null}
+```
+
+- **Deterministic text:** the same lead and template always give the same text. Templates are fixed in code; `template_version` records which version produced a draft.
+- **Only the lead's name and company are used.** Notes, phone, source, status and scores never appear in a draft. Email is the only channel: a lead without an email gets `422 draft.no_email`.
+- **Eligible leads:** the lead's status must be `new`, `contacted` or `qualified`. For `won` or `lost` leads you get `409 draft.lead_not_eligible` with `lead_status`.
+- **One draft awaiting review per lead:** a second one gets `409 draft.pending_exists`. Approve or reject the first.
+- **Drafts can't be edited.** The stored text is exactly what you review and approve. To change it, reject the draft and create a new one. No signature or sender is added.
+
+**Review it.**
+
+```sh
+curl http://127.0.0.1:8000/api/v1/drafts/<draft_id> -H "Authorization: Bearer $LEADFLOW_OPERATOR_TOKEN"
+curl "http://127.0.0.1:8000/api/v1/leads/<id>/drafts?limit=50&offset=0" -H "Authorization: Bearer $LEADFLOW_OPERATOR_TOKEN"   # newest first
+
+curl -X POST http://127.0.0.1:8000/api/v1/drafts/<draft_id>/approve \
+  -H "Authorization: Bearer $LEADFLOW_OPERATOR_TOKEN"
+# {"draft": {..., "status": "approved", "decided_at": "..."},
+#  "outbox_message": {"id": "...", "draft_id": "...", "lead_id": "...", "status": "simulated",
+#                     "recipient": "...", "subject": "...", "body": "...", "created_at": "..."}}
+
+curl -X POST http://127.0.0.1:8000/api/v1/drafts/<draft_id>/reject \
+  -H "Authorization: Bearer $LEADFLOW_OPERATOR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"reason": "Too formal"}'     # or '{}' for no reason; reason is at most 500 characters
+```
+
+- **Approval checks the lead again.** If the lead is no longer `new`, `contacted` or `qualified` (for example it was marked `lost` after the draft was created), approval returns `409 draft.lead_not_eligible`, the draft stays `pending_review`, and no outbox item is created. Reject the draft, or reopen the lead (`lost` → `contacted`) and approve again.
+- **Each draft is decided once.** Approving or rejecting a decided draft returns `409 draft.already_decided` with its `status`. When two decisions arrive at the same moment, exactly one succeeds.
+- **Approval is all-or-nothing:** the draft's new status and its outbox item are saved in one transaction. A rejected or failed approval never creates an outbox item.
+- **Rejection works for any lead status**, so a pending draft for a `won` or `lost` lead can always be cleared.
+- **Approval doesn't change the lead's status** or its activity history.
+
+**The outbox.** `GET /api/v1/outbox?limit&offset` lists items newest first; `GET /api/v1/outbox/{id}` returns one. Every item's `status` is `simulated`. Its recipient, subject and body are those of the approved draft, which can never change afterwards: the database itself rejects edits to draft text, to decided drafts and to outbox items, and rejects deleting outbox items.
+
 ### Errors
 
 Most errors have the form `{"detail": {"code": "...", ...}}`. Depending on the error, `detail` also has a `message`, a list of `errors`, `row_errors`, or `conflicts`. Errors never include the values you sent.
@@ -347,13 +407,18 @@ Most errors have the form `{"detail": {"code": "...", ...}}`. Depending on the e
 |---|---|---|
 | `401` | none (`detail` is the string `"Invalid or missing bearer token"`) | missing or wrong token |
 | `404` | `lead.not_found` | no lead with that id (also for malformed ids) |
+| `404` | `draft.not_found` / `outbox.not_found` | no draft or outbox item with that id (also for malformed ids) |
 | `404` | none (`"Not Found"`) | unknown path, including a trailing slash such as `/api/v1/leads/` |
 | `409` | `lead.duplicate` | email or phone already stored |
 | `409` | `lead.status_conflict` | `expected_status` doesn't match the lead's current status |
+| `409` | `draft.lead_not_eligible` | creating or approving a draft for a lead that isn't `new`, `contacted` or `qualified`; includes `lead_status` and `eligible` |
+| `409` | `draft.pending_exists` | the lead already has a draft awaiting review |
+| `409` | `draft.already_decided` | the draft was already approved or rejected; includes `status` |
 | `413` | `request.too_large` | body over 16 KiB (16384 bytes); over 1 MiB (1048576 bytes) for CSV import |
-| `415` | `request.unsupported_media_type` | `Content-Type` missing or wrong: `application/json` for `POST /api/v1/leads`, `text/csv` (UTF-8) for the import |
+| `415` | `request.unsupported_media_type` | `Content-Type` missing or wrong: `application/json` for JSON bodies (creating leads and drafts, status changes, rejecting a draft), `text/csv` (UTF-8) for the import |
 | `422` | `lead.invalid` | field validation failed; `errors` lists each `field` and `code` |
 | `422` | `lead.invalid_transition` | the lifecycle doesn't allow that status change |
+| `422` | `draft.no_email` | the lead has no email address (drafts are email only) |
 | `422` | `request.invalid_body` | body isn't a single JSON object (bad JSON, an array, duplicate keys, ...) |
 | `422` | `request.invalid` | bad query parameter, such as `limit=0` |
 | `422` | `import.rejected` | CSV import: some rows are invalid or duplicates; nothing was imported |
@@ -369,7 +434,7 @@ Most errors have the form `{"detail": {"code": "...", ...}}`. Depending on the e
 
 | `detail.code` | Meaning | What to do |
 |---|---|---|
-| `database.not_migrated` | The leads table doesn't exist | Run `uv run alembic upgrade head`. No restart needed: the next request works. |
+| `database.not_migrated` | A table doesn't exist, for example the draft tables before migration `0003` | Run `uv run alembic upgrade head`. No restart needed: the next request works. |
 | `database.busy` | Another process held the write lock for over 5 seconds | Retry. The response has `Retry-After: 1`, and the server doesn't retry for you. |
 | `database.unavailable` | The database file can't be opened (missing or read-only directory) | Check `LEADFLOW_DATABASE_URL` and the directory permissions. The response never shows the path. |
 
@@ -384,6 +449,7 @@ Most errors have the form `{"detail": {"code": "...", ...}}`. Depending on the e
 - **CSV import errors** report row and column numbers, never cell values or header text. Uploaded files are processed in memory and never saved to disk.
 - **Database error messages** hide SQL parameter values, and printing a stored lead object in a log or traceback shows only its id.
 - **Lead data** is returned only to requests with the operator token. Anyone with the token can read every lead.
+- **Draft text, recipients and rejection reasons** are returned only to requests with the operator token. They never appear in error responses, and printing a draft or outbox object shows only its id (and a draft's status).
 
 ## Lead validation in Python
 
@@ -445,10 +511,12 @@ uv run pytest                # includes coverage, fails under 90%
 src/leadflow_ai/
   api/             HTTP routes, request limits, error responses (M2)
   db/              SQLAlchemy models, engine/session, Alembic migrations (M2)
-  services/        lead create/get/list, duplicate handling (M2), CSV batch import (M3)
+  services/        lead create/get/list, duplicate handling (M2), CSV batch import (M3),
+                   status changes (M5), drafts and the simulated outbox (M6)
   imports/         CSV file reading and header checks (M3)
   scoring/         scoring rules (default_rules.toml), validation and the pure scoring engine (M4)
   lifecycle/       lead statuses and the allowed transitions (M5)
+  drafts/          fixed email templates and draft statuses (M6)
   leads/           pure-Python validation and normalization (M1)
   main.py          application factory
 alembic.ini        Alembic configuration (the database URL comes from settings)
@@ -456,4 +524,4 @@ tests/             unit, database, and API tests
 docs/adr/          architectural decision records
 ```
 
-Design decisions: [ADR 0001](docs/adr/0001-m0-foundation.md) (foundation), [ADR 0002](docs/adr/0002-m1-lead-validation.md) (validation), [ADR 0003](docs/adr/0003-m2-database-and-api.md) (database and API), [ADR 0004](docs/adr/0004-m3-csv-import.md) (CSV import), [ADR 0005](docs/adr/0005-m4-lead-scoring.md) (lead scoring), [ADR 0006](docs/adr/0006-m5-lead-lifecycle.md) (lead lifecycle).
+Design decisions: [ADR 0001](docs/adr/0001-m0-foundation.md) (foundation), [ADR 0002](docs/adr/0002-m1-lead-validation.md) (validation), [ADR 0003](docs/adr/0003-m2-database-and-api.md) (database and API), [ADR 0004](docs/adr/0004-m3-csv-import.md) (CSV import), [ADR 0005](docs/adr/0005-m4-lead-scoring.md) (lead scoring), [ADR 0006](docs/adr/0006-m5-lead-lifecycle.md) (lead lifecycle), [ADR 0007](docs/adr/0007-m6-drafts-and-simulated-outbox.md) (drafts and simulated outbox).

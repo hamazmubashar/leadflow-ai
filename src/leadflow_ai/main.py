@@ -10,6 +10,8 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 
 from leadflow_ai import __version__
+from leadflow_ai.api.drafts import outbox_router
+from leadflow_ai.api.drafts import router as drafts_router
 from leadflow_ai.api.errors import register_error_handlers
 from leadflow_ai.api.leads import IMPORT_PATH
 from leadflow_ai.api.leads import router as leads_router
@@ -58,6 +60,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     register_error_handlers(app)
     app.include_router(leads_router)
+    app.include_router(drafts_router)
+    app.include_router(outbox_router)
 
     @app.get("/health", response_model=HealthResponse, tags=["system"])
     def health() -> HealthResponse:

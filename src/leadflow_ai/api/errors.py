@@ -8,8 +8,15 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import OperationalError
 
+from leadflow_ai.drafts import ELIGIBLE_LEAD_STATUSES
 from leadflow_ai.imports.csv_reader import CsvFileError
 from leadflow_ai.leads import LeadValidationError
+from leadflow_ai.services.drafts import (
+    DraftAlreadyDecidedError,
+    LeadHasNoEmailError,
+    LeadNotEligibleError,
+    PendingDraftExistsError,
+)
 from leadflow_ai.services.imports import ImportRejectedError
 from leadflow_ai.services.leads import DuplicateLeadError
 from leadflow_ai.services.lifecycle import InvalidTransitionError, StatusConflictError
@@ -180,6 +187,52 @@ async def _status_conflict(request: Request, exc: Exception) -> JSONResponse:
     )
 
 
+async def _draft_no_email(request: Request, exc: Exception) -> JSONResponse:
+    return _error(
+        422,
+        {
+            "code": "draft.no_email",
+            "message": "The lead has no email address; drafts are email only",
+        },
+    )
+
+
+async def _draft_lead_not_eligible(request: Request, exc: Exception) -> JSONResponse:
+    error = cast(LeadNotEligibleError, exc)
+    return _error(
+        409,
+        {
+            "code": "draft.lead_not_eligible",
+            "message": "Drafts can only be created or approved while the lead's status is"
+            " new, contacted or qualified",
+            "lead_status": error.lead_status.value,
+            "eligible": [status.value for status in ELIGIBLE_LEAD_STATUSES],
+        },
+    )
+
+
+async def _draft_pending_exists(request: Request, exc: Exception) -> JSONResponse:
+    return _error(
+        409,
+        {
+            "code": "draft.pending_exists",
+            "message": "This lead already has a draft awaiting review; approve or reject it first",
+        },
+    )
+
+
+async def _draft_already_decided(request: Request, exc: Exception) -> JSONResponse:
+    error = cast(DraftAlreadyDecidedError, exc)
+    return _error(
+        409,
+        {
+            "code": "draft.already_decided",
+            "message": "This draft is no longer awaiting review",
+            "status": error.status.value,
+        },
+    )
+
+
 def register_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(RequestValidationError, _request_validation)
     app.add_exception_handler(InvalidRequestBodyError, _invalid_body)
@@ -190,4 +243,8 @@ def register_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(ImportRejectedError, _import_rejected)
     app.add_exception_handler(InvalidTransitionError, _invalid_transition)
     app.add_exception_handler(StatusConflictError, _status_conflict)
+    app.add_exception_handler(LeadHasNoEmailError, _draft_no_email)
+    app.add_exception_handler(LeadNotEligibleError, _draft_lead_not_eligible)
+    app.add_exception_handler(PendingDraftExistsError, _draft_pending_exists)
+    app.add_exception_handler(DraftAlreadyDecidedError, _draft_already_decided)
     app.add_exception_handler(OperationalError, _database_unavailable)
