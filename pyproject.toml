@@ -21,6 +21,11 @@ dev = [
     "pytest-cov>=6.0",
     "ruff>=0.8",
 ]
+ui = [
+    "requests>=2.34.2",
+    "streamlit>=1.66.0",
+    "types-requests>=2.33.0.20261006",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -39,6 +44,7 @@ select = ["E", "W", "F", "I", "B", "UP", "S", "N", "SIM", "RUF"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "S105", "S106"]
+"dashboard/tests/**" = ["S101", "S105", "S106"]
 
 [tool.mypy]
 python_version = "3.12"

@@ -1,0 +1,31 @@
+# LeadFlow AI dashboard. No secrets belong here: the token is read from .env.
+
+[server]
+# Listen on this computer only. Streamlit's default listens on every network
+# interface, which would expose lead data to anyone on the same Wi-Fi.
+address = "127.0.0.1"
+port = 8501
+headless = true
+
+[browser]
+# Streamlit sends anonymous usage statistics by default; this project makes no
+# external calls.
+gatherUsageStats = false
+
+[runner]
+magicEnabled = false
+
+[client]
+toolbarMode = "minimal"
+
+[theme]
+base = "dark"
+primaryColor = "#F97316"
+backgroundColor = "#0B1F3B"
+secondaryBackgroundColor = "#0F2A44"
+textColor = "#F8FAFC"
+font = "sans serif"
+
+[theme.sidebar]
+backgroundColor = "#081830"
+secondaryBackgroundColor = "#0F2A44"
