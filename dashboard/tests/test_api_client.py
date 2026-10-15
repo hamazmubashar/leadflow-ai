@@ -228,3 +228,99 @@ def test_transport_failures_are_distinguished_from_http_errors(
 def test_unreadable_health_responses(outcome: FakeResponse) -> None:
     client, _ = client_for(outcome)
     assert raised(client.health).kind is ApiErrorKind.INVALID_RESPONSE
+
+
+# --- lead endpoints ---------------------------------------------------------------------
+
+LEAD = {
+    "id": "2f1c0000-0000-4000-8000-000000000001",
+    "full_name": "Test Person",
+    "email": "test@example.com",
+    "phone": None,
+    "company": None,
+    "source": "referral",
+    "notes": None,
+    "created_at": "2026-10-15T12:00:00Z",
+}
+
+
+def test_list_leads_sends_paging_and_parses_the_page() -> None:
+    client, session = client_for(respond(200, {"items": [LEAD], "limit": 100, "offset": 200}))
+    page = client.list_leads(limit=100, offset=200)
+    assert session.calls[0]["params"] == {"limit": 100, "offset": 200}
+    assert page.items[0].full_name == "Test Person"
+    assert page.items[0].source.value == "referral"
+
+
+def test_unknown_fields_are_ignored() -> None:
+    client, _ = client_for(
+        respond(200, {"items": [{**LEAD, "status": "new"}], "limit": 1, "offset": 0})
+    )
+    assert client.list_leads(limit=1).items[0].id == LEAD["id"]
+
+
+def test_a_malformed_page_is_an_invalid_response_without_values() -> None:
+    bad = {**LEAD, "source": "carrier-pigeon"}
+    client, _ = client_for(respond(200, {"items": [bad], "limit": 1, "offset": 0}))
+    error = raised(lambda: client.list_leads(limit=1))
+    assert error.kind is ApiErrorKind.INVALID_RESPONSE
+    assert "carrier-pigeon" not in error.message
+
+
+def test_score_and_activity_paths_encode_the_id() -> None:
+    score = {
+        "lead_id": "a/b",
+        "score": 45,
+        "max_score": 100,
+        "tier": "warm",
+        "rules_version": "2026-10-15.1",
+        "factors": [{"rule": "has_email", "matched": True, "points": 15}],
+    }
+    client, session = client_for(respond(200, score))
+    assert client.get_score("a/b").tier == "warm"
+    assert session.calls[0]["url"] == f"{BASE}/api/v1/leads/a%2Fb/score"
+
+
+def test_activity_returns_current_status() -> None:
+    body = {"lead_id": "x", "status": "contacted", "items": [], "limit": 1, "offset": 0}
+    client, session = client_for(respond(200, body))
+    assert client.get_activity("x").status.value == "contacted"
+    assert session.calls[0]["params"] == {"limit": 1, "offset": 0}
+
+
+def test_create_lead_posts_json_once_with_the_token() -> None:
+    client, session = client_for(respond(201, LEAD))
+    lead = client.create_lead({"full_name": "Test Person", "email": "test@example.com"})
+    call = session.calls[0]
+    assert (call["method"], call["url"]) == ("POST", f"{BASE}/api/v1/leads")
+    assert call["json"] == {"full_name": "Test Person", "email": "test@example.com"}
+    assert call["headers"]["Authorization"] == f"Bearer {TOKEN}"
+    assert lead.id == LEAD["id"]
+
+
+def test_create_lead_is_not_retried_after_a_timeout() -> None:
+    client, session = client_for(requests.ReadTimeout("slow"))
+    error = raised(lambda: client.create_lead({"full_name": "Test Person"}))
+    assert error.kind is ApiErrorKind.TIMEOUT
+    assert len(session.calls) == 1
+
+
+def test_list_lead_drafts_parses_drafts() -> None:
+    draft = {
+        "id": "d1",
+        "lead_id": "x",
+        "template": "follow_up",
+        "template_version": "1",
+        "channel": "email",
+        "recipient": "test@example.com",
+        "subject": "Hi",
+        "body": "Body",
+        "status": "pending_review",
+        "rejection_reason": None,
+        "created_at": "2026-10-15T12:00:00Z",
+        "decided_at": None,
+    }
+    client, session = client_for(respond(200, {"items": [draft], "limit": 100, "offset": 0}))
+    page = client.list_lead_drafts("x")
+    assert session.calls[0]["url"] == f"{BASE}/api/v1/leads/x/drafts"
+    assert page.items[0].status.value == "pending_review"

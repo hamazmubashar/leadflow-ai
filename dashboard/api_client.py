@@ -9,12 +9,16 @@ logged.
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Protocol
+from urllib.parse import quote
 
 import requests
+from pydantic import BaseModel, ValidationError
 
 from dashboard.config import DashboardSettings
+from dashboard.models import Activity, DraftPage, Lead, LeadPage, Score
 
 CONNECT_TIMEOUT_SECONDS = 3.05
+MAX_PAGE_LIMIT = 100  # the API's maximum ``limit`` for every list endpoint
 JsonObject = dict[str, Any]
 
 
@@ -128,6 +132,39 @@ class ApiClient:
         """
         self._request("GET", "/api/v1/leads", params={"limit": 1})
 
+    def list_leads(self, *, limit: int = MAX_PAGE_LIMIT, offset: int = 0) -> LeadPage:
+        """``GET /api/v1/leads``: one page, newest first."""
+        body = self._request("GET", "/api/v1/leads", params={"limit": limit, "offset": offset})
+        return _validate(LeadPage, body)
+
+    def get_score(self, lead_id: str) -> Score:
+        """``GET /api/v1/leads/{id}/score``: calculated by the API on every request."""
+        return _validate(Score, self._request("GET", f"/api/v1/leads/{_segment(lead_id)}/score"))
+
+    def get_activity(self, lead_id: str, *, limit: int = 1, offset: int = 0) -> Activity:
+        """``GET /api/v1/leads/{id}/activity``: current status plus events, oldest first."""
+        body = self._request(
+            "GET",
+            f"/api/v1/leads/{_segment(lead_id)}/activity",
+            params={"limit": limit, "offset": offset},
+        )
+        return _validate(Activity, body)
+
+    def list_lead_drafts(
+        self, lead_id: str, *, limit: int = MAX_PAGE_LIMIT, offset: int = 0
+    ) -> DraftPage:
+        """``GET /api/v1/leads/{id}/drafts``: one lead's drafts, newest first."""
+        body = self._request(
+            "GET",
+            f"/api/v1/leads/{_segment(lead_id)}/drafts",
+            params={"limit": limit, "offset": offset},
+        )
+        return _validate(DraftPage, body)
+
+    def create_lead(self, payload: dict[str, str]) -> Lead:
+        """``POST /api/v1/leads``. Sent once; never retried (a retry could duplicate it)."""
+        return _validate(Lead, self._request("POST", "/api/v1/leads", json=dict(payload)))
+
     # --- transport ----------------------------------------------------------------------
 
     def _request(
@@ -197,6 +234,18 @@ def _parse(response: HttpResponse) -> JsonObject:
             detail=detail,
         )
     raise ApiError(ApiErrorKind.HTTP_ERROR, _generic_message(status), status_code=status)
+
+
+def _validate[M: BaseModel](model: type[M], body: JsonObject) -> M:
+    try:
+        return model.model_validate(body)
+    except ValidationError:
+        raise _invalid_response() from None  # field values are not echoed
+
+
+def _segment(value: str) -> str:
+    """Encode an id as one URL path segment, so it can never change the path."""
+    return quote(value, safe="")
 
 
 def _generic_message(status: int) -> str:

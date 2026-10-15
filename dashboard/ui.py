@@ -27,6 +27,7 @@ _MARKDOWN_SPECIAL = re.compile(r"([\\`*_{}\[\]()#+\-.!|<>~$:])")
 
 _CSS = f"""
 <style>
+  [data-testid="stMainBlockContainer"] {{ padding-top: 2.5rem; }}
   .lf-header h1 {{ margin: 0; font-size: 1.75rem; font-weight: 700; color: {TEXT}; }}
   .lf-header p {{ margin: 0.25rem 0 1.25rem; color: {MUTED}; }}
   .lf-card {{
@@ -39,6 +40,23 @@ _CSS = f"""
     display: inline-block; padding: 0.15rem 0.6rem; border-radius: 999px;
     font-size: 0.8rem; font-weight: 600; border: 1px solid currentColor;
   }}
+  .lf-kpi {{
+    background: {SURFACE}; border: 1px solid {BORDER}; border-radius: 12px;
+    border-top: 3px solid var(--accent); padding: 1rem 1.25rem; margin-bottom: 1rem;
+  }}
+  .lf-kpi .lf-label {{ color: {MUTED}; font-size: 0.9rem; }}
+  .lf-kpi .lf-big {{ color: {TEXT}; font-size: 2.2rem; font-weight: 700; line-height: 1.2; }}
+  .lf-kpi .lf-sub {{ color: {MUTED}; font-size: 0.8rem; }}
+  .lf-table {{ width: 100%; border-collapse: collapse; font-size: 0.88rem; }}
+  .lf-table th {{
+    text-align: left; color: {MUTED}; font-weight: 600; padding: 0.45rem 0.5rem;
+    border-bottom: 1px solid {BORDER};
+  }}
+  .lf-table td {{
+    color: {TEXT}; padding: 0.5rem; border-bottom: 1px solid {BORDER}; vertical-align: top;
+  }}
+  .lf-table td.lf-muted {{ color: {MUTED}; white-space: nowrap; }}
+  .lf-table td .lf-small {{ color: {MUTED}; font-size: 0.78rem; }}
   .lf-brand {{ font-size: 1.3rem; font-weight: 700; color: {TEXT}; }}
   .lf-brand span {{ color: {ORANGE}; }}
 </style>
@@ -103,3 +121,31 @@ def show_api_error(error: ApiError) -> None:
         st.warning(text, icon=":material/cloud_off:")
     else:
         st.error(text, icon=":material/error:")
+
+
+def kpi_card(label: str, value: str, sub: str, accent: str) -> None:
+    """A KPI tile: label, big value, one muted line. ``accent`` is a theme colour constant."""
+    st.markdown(
+        f'<div class="lf-kpi" style="--accent:{accent}">'
+        f'<div class="lf-label">{html.escape(label)}</div>'
+        f'<div class="lf-big">{html.escape(value)}</div>'
+        f'<div class="lf-sub">{html.escape(sub)}</div></div>',
+        unsafe_allow_html=True,
+    )
+
+
+def html_table(headers: list[str], rows: list[list[str]]) -> None:
+    """A themed table. Cells are HTML: build them with ``cell``/``pill``, never raw API text."""
+    head = "".join(f"<th>{html.escape(h)}</th>" for h in headers)
+    body = "".join("<tr>" + "".join(row) + "</tr>" for row in rows)
+    st.markdown(
+        f'<table class="lf-table"><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>',
+        unsafe_allow_html=True,
+    )
+
+
+def cell(text: str, *, muted: bool = False, small: str = "") -> str:
+    """One escaped table cell, optionally with a muted second line."""
+    second = f'<br><span class="lf-small">{html.escape(small)}</span>' if small else ""
+    css = ' class="lf-muted"' if muted else ""
+    return f"<td{css}>{html.escape(text)}{second}</td>"
