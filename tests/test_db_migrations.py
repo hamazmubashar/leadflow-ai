@@ -46,22 +46,22 @@ def _normalize_sql(sql: str) -> str:
 
 def test_single_linear_head(alembic_config: Config) -> None:
     script = ScriptDirectory.from_config(alembic_config)
-    assert script.get_heads() == ["0001"]
-    assert [rev.revision for rev in script.walk_revisions()] == ["0001"]
+    assert script.get_heads() == ["0002"]
+    assert [rev.revision for rev in script.walk_revisions()] == ["0002", "0001"]
 
 
 def test_upgrade_downgrade_upgrade_cycle(alembic_config: Config, database_url: str) -> None:
     command.upgrade(alembic_config, "head")
-    assert _tables(database_url) == {"alembic_version", "leads"}
-    assert _current_revision(database_url) == "0001"
+    assert _tables(database_url) == {"alembic_version", "leads", "lead_events"}
+    assert _current_revision(database_url) == "0002"
 
     command.downgrade(alembic_config, "base")
     assert _tables(database_url) == {"alembic_version"}
     assert _current_revision(database_url) is None
 
     command.upgrade(alembic_config, "head")
-    assert _tables(database_url) == {"alembic_version", "leads"}
-    assert _current_revision(database_url) == "0001"
+    assert _tables(database_url) == {"alembic_version", "leads", "lead_events"}
+    assert _current_revision(database_url) == "0002"
 
 
 def test_migrations_do_not_require_operator_token(
@@ -69,7 +69,7 @@ def test_migrations_do_not_require_operator_token(
 ) -> None:
     monkeypatch.delenv("LEADFLOW_OPERATOR_TOKEN", raising=False)
     command.upgrade(alembic_config, "head")
-    assert _current_revision(database_url) == "0001"
+    assert _current_revision(database_url) == "0002"
 
 
 def test_migrations_run_without_ini_file(database_url: str) -> None:
@@ -87,8 +87,8 @@ def test_migrations_run_without_ini_file(database_url: str) -> None:
     finally:
         alembic_logger.setLevel(original_level)
 
-    assert _tables(database_url) == {"alembic_version", "leads"}
-    assert _current_revision(database_url) == "0001"
+    assert _tables(database_url) == {"alembic_version", "leads", "lead_events"}
+    assert _current_revision(database_url) == "0002"
     command.downgrade(config, "base")
     assert _tables(database_url) == {"alembic_version"}
 
@@ -121,6 +121,7 @@ def test_migrated_columns_match_approved_schema(migrated_engine: Engine) -> None
         "source": ("VARCHAR(20)", False),
         "notes": ("VARCHAR(1000)", True),
         "created_at": ("DATETIME", False),
+        "status": ("VARCHAR(20)", False),
     }
 
 
@@ -135,20 +136,46 @@ def test_migrated_constraint_names_and_rules_match_models(migrated_engine: Engin
     } == {("uq_leads_email", ("email",)), ("uq_leads_phone", ("phone",))}
 
     # Alembic's compare_metadata does not compare CHECK constraints, so compare them here.
-    migrated = {
-        ck["name"]: _normalize_sql(ck["sqltext"]) for ck in inspector.get_check_constraints("leads")
-    }
-    modeled = {
-        str(constraint.name): _normalize_sql(str(constraint.sqltext))
-        for constraint in Base.metadata.tables["leads"].constraints
-        if isinstance(constraint, CheckConstraint)
-    }
-    assert migrated == modeled
-    assert set(migrated) == {
+    for table in ("leads", "lead_events"):
+        migrated = {
+            ck["name"]: _normalize_sql(ck["sqltext"])
+            for ck in inspector.get_check_constraints(table)
+        }
+        modeled = {
+            str(constraint.name): _normalize_sql(str(constraint.sqltext))
+            for constraint in Base.metadata.tables[table].constraints
+            if isinstance(constraint, CheckConstraint)
+        }
+        assert migrated == modeled, table
+    assert {ck["name"] for ck in inspector.get_check_constraints("leads")} == {
         "ck_leads_contact_required",
         "ck_leads_source_allowed",
         "ck_leads_email_lowercase",
+        "ck_leads_status_allowed",
     }
+    assert {ck["name"] for ck in inspector.get_check_constraints("lead_events")} == {
+        "ck_lead_events_sequence_positive",
+        "ck_lead_events_event_type_allowed",
+        "ck_lead_events_to_status_allowed",
+        "ck_lead_events_from_status_allowed",
+        "ck_lead_events_shape",
+    }
+    assert inspector.get_pk_constraint("lead_events")["name"] == "pk_lead_events"
+    assert [
+        (uc["name"], uc["column_names"]) for uc in inspector.get_unique_constraints("lead_events")
+    ] == [("uq_lead_events_lead_id_sequence", ["lead_id", "sequence"])]
+    [fk] = inspector.get_foreign_keys("lead_events")
+    assert (
+        fk["name"],
+        fk["constrained_columns"],
+        fk["referred_table"],
+        fk["referred_columns"],
+    ) == (
+        "fk_lead_events_lead_id_leads",
+        ["lead_id"],
+        "leads",
+        ["id"],
+    )
 
 
 def test_offline_sql_generation(
@@ -158,6 +185,9 @@ def test_offline_sql_generation(
     sql = capsys.readouterr().out
     assert "CREATE TABLE leads" in sql
     assert "CONSTRAINT uq_leads_email UNIQUE (email)" in sql
+    assert "ALTER TABLE leads ADD COLUMN status VARCHAR(20) DEFAULT 'new' NOT NULL" in sql
+    assert "CREATE TABLE lead_events" in sql
+    assert "INSERT INTO lead_events" in sql  # the backfill is plain SQL, so offline mode works
     assert "CONSTRAINT ck_leads_contact_required CHECK" in sql
     # Offline mode must not touch the database file.
     assert _tables(database_url) == set()

@@ -15,7 +15,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from leadflow_ai.db.models import LeadRecord
+from leadflow_ai.db.models import LeadRecord, lead_created_event
 from leadflow_ai.leads import Lead, validate_lead
 
 DEFAULT_PAGE_LIMIT = 50
@@ -70,6 +70,8 @@ def create_lead(session: Session, data: Mapping[str, object]) -> LeadRecord:
     )
     session.add(record)
     try:
+        session.flush()  # insert the lead first: its lead_created event references it
+        session.add(lead_created_event(record))
         session.commit()
     except IntegrityError:
         # Another writer stored the same identity after our lookup. The UNIQUE

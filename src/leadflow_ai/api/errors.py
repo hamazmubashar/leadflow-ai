@@ -12,6 +12,7 @@ from leadflow_ai.imports.csv_reader import CsvFileError
 from leadflow_ai.leads import LeadValidationError
 from leadflow_ai.services.imports import ImportRejectedError
 from leadflow_ai.services.leads import DuplicateLeadError
+from leadflow_ai.services.lifecycle import InvalidTransitionError, StatusConflictError
 
 RETRY_AFTER_SECONDS = "1"
 
@@ -153,6 +154,32 @@ async def _database_unavailable(request: Request, exc: Exception) -> JSONRespons
     raise exc
 
 
+async def _invalid_transition(request: Request, exc: Exception) -> JSONResponse:
+    error = cast(InvalidTransitionError, exc)
+    return _error(
+        422,
+        {
+            "code": "lead.invalid_transition",
+            "message": "This status change is not allowed",
+            "from_status": error.current.value,
+            "to_status": error.target.value,
+            "allowed": [status.value for status in error.allowed],
+        },
+    )
+
+
+async def _status_conflict(request: Request, exc: Exception) -> JSONResponse:
+    error = cast(StatusConflictError, exc)
+    return _error(
+        409,
+        {
+            "code": "lead.status_conflict",
+            "message": "The lead's status has changed; reload it and try again",
+            "current_status": error.current.value,
+        },
+    )
+
+
 def register_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(RequestValidationError, _request_validation)
     app.add_exception_handler(InvalidRequestBodyError, _invalid_body)
@@ -161,4 +188,6 @@ def register_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(DuplicateLeadError, _lead_duplicate)
     app.add_exception_handler(CsvFileError, _import_invalid_file)
     app.add_exception_handler(ImportRejectedError, _import_rejected)
+    app.add_exception_handler(InvalidTransitionError, _invalid_transition)
+    app.add_exception_handler(StatusConflictError, _status_conflict)
     app.add_exception_handler(OperationalError, _database_unavailable)

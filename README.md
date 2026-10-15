@@ -7,10 +7,11 @@ A local-first service for collecting and validating sales leads.
 - **M2, storage and API:** a local SQLite database (SQLAlchemy and Alembic) and an authenticated REST API to create and read leads.
 - **M3, CSV import:** upload a CSV file of leads; every row is validated and the whole file is imported, or nothing is.
 - **M4, lead scoring:** a 0–100 score with a hot/warm/cold tier, calculated on request from versioned TOML rules, with a per-rule explanation.
+- **M5, lead lifecycle:** each lead has a status (new, contacted, qualified, won, lost), changed through allowed transitions, with an append-only activity history.
 
 Everything runs on your machine, and it uses no paid services or external APIs. There's no dashboard, machine learning, or LLM.
 
-> **LeadFlow AI does not send anything.** No emails, SMS, or other messages are sent, and there's no sending feature in M0–M4, real or simulated. It only stores and returns the leads you submit.
+> **LeadFlow AI does not send anything.** No emails, SMS, or other messages are sent, and there's no sending feature in M0–M5, real or simulated. It only stores and returns the leads you submit.
 
 ## Requirements
 
@@ -60,13 +61,16 @@ Settings come from environment variables or from `.env` in the directory you run
 Alembic creates and upgrades the schema. The app never creates tables itself.
 
 ```sh
-uv run alembic upgrade head     # creates ./leadflow.db (or LEADFLOW_DATABASE_URL) and the leads table
-uv run alembic current          # shows the applied revision, e.g. "0001 (head)"
+uv run alembic upgrade head     # creates ./leadflow.db (or LEADFLOW_DATABASE_URL) and its tables
+uv run alembic current          # shows the applied revision, e.g. "0002 (head)"
 ```
 
 - **Token:** migrations read only `LEADFLOW_DATABASE_URL`, so they don't need the operator token.
 - **After an upgrade:** run `uv run alembic upgrade head` again after pulling a version with new migrations.
 - **Undo:** `uv run alembic downgrade base` removes the schema and **deletes all leads**.
+- **Back up before upgrading.** Stop the server and copy `leadflow.db` (and any `leadflow.db-wal` / `leadflow.db-shm` files) before running `alembic upgrade head` on a database that has data.
+- **Upgrades are all-or-nothing.** Each upgrade runs in a single transaction: if any step fails, the database is left exactly as it was and `alembic current` still shows the previous revision.
+- **Upgrading to 0.5.0 (migration `0002`)** gives every existing lead the status `new` and one `lead_created` history event. Those events are **reconstructed** from each lead's stored `created_at`, because no history was recorded before M5. `uv run alembic downgrade 0001` removes the lifecycle data but keeps the leads.
 
 ## Run the server
 
@@ -78,7 +82,7 @@ Add `--reload` while developing. The server listens on `http://127.0.0.1:8000`, 
 
 ```sh
 curl http://127.0.0.1:8000/health
-# {"status":"ok","version":"0.4.0"}
+# {"status":"ok","version":"0.5.0"}
 ```
 
 **`/health` doesn't check the database.** It only shows that the process is running. The app opens the database on the first lead request, so a healthy server can still answer lead requests with `503` (see [Database errors](#database-errors)).
@@ -285,6 +289,56 @@ curl http://127.0.0.1:8000/api/v1/leads/<id>/score \
 - **Invalid rules stop the server from starting**, with a list of every problem by key path. The server **never** silently falls back to the built-in rules.
 - **Changes take effect after a restart.**
 
+### Lead lifecycle: `POST /api/v1/leads/{id}/status` and `GET /api/v1/leads/{id}/activity`
+
+Every lead has a **status**. New and imported leads start as `new`. Allowed changes:
+
+| From | To |
+|---|---|
+| `new` | `contacted`, `qualified`, `lost` |
+| `contacted` | `qualified`, `lost` |
+| `qualified` | `won`, `lost` |
+| `lost` | `contacted` (reopen) |
+| `won` | none (final) |
+
+Changing to the same status isn't allowed.
+
+**Change a status.** Send the new `status` **and the `expected_status`** (the status you last saw). An optional `note` of up to 500 characters is stored with the change.
+
+```sh
+curl -X POST http://127.0.0.1:8000/api/v1/leads/<id>/status \
+  -H "Authorization: Bearer $LEADFLOW_OPERATOR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"status": "contacted", "expected_status": "new", "note": "Called, asked for a demo"}'
+```
+
+```json
+{"lead_id": "2f1c...", "status": "contacted",
+ "event": {"id": "9b3e...", "sequence": 2, "type": "status_changed", "from_status": "new",
+           "to_status": "contacted", "note": "Called, asked for a demo", "occurred_at": "2026-10-15T12:00:00.123456Z"}}
+```
+
+- **The status and its history event are saved together,** in one transaction: either both are stored or neither is.
+- **`expected_status` prevents lost updates.** If the lead's status isn't what you expected, because someone else changed it first, nothing is written and you get `409 lead.status_conflict` with `current_status`. Reload, decide again, and retry. When two changes arrive at the same moment, exactly one succeeds.
+- **A change the table doesn't allow** returns `422 lead.invalid_transition` with `from_status`, `to_status`, and the `allowed` next statuses.
+- **A missing or invalid field** (status, expected status, note, unknown fields) returns `422 lead.invalid` with the same per-field `errors` as lead creation. An unknown status value has the code `status.invalid_choice`; status values ignore case.
+
+**View the history.** Events are returned **oldest first**, ordered by `sequence` (1, 2, 3, ... per lead). `limit` and `offset` work as for the lead list.
+
+```sh
+curl "http://127.0.0.1:8000/api/v1/leads/<id>/activity?limit=50&offset=0" \
+  -H "Authorization: Bearer $LEADFLOW_OPERATOR_TOKEN"
+# {"lead_id": "...", "status": "contacted", "items": [{"sequence": 1, "type": "lead_created", ...},
+#   {"sequence": 2, "type": "status_changed", ...}], "limit": 50, "offset": 0}
+```
+
+- **Timestamps:** `occurred_at` is set by the server, in UTC. `sequence`, not the timestamp, defines the order.
+- **Append-only:** events can't be edited or deleted.
+- **Leads that existed before 0.5.0** have a reconstructed `lead_created` event (see [Create the database](#create-the-database)).
+- **Notes are visible to anyone with the operator token.** They may contain personal data, so keep them short and factual. They never appear in error responses.
+- **No per-person attribution:** with one shared token, the history can't record *who* made a change.
+- **Not shown elsewhere:** existing lead responses (create, get, list, import) don't include the status. Use the activity endpoint.
+
 ### Errors
 
 Most errors have the form `{"detail": {"code": "...", ...}}`. Depending on the error, `detail` also has a `message`, a list of `errors`, `row_errors`, or `conflicts`. Errors never include the values you sent.
@@ -295,9 +349,11 @@ Most errors have the form `{"detail": {"code": "...", ...}}`. Depending on the e
 | `404` | `lead.not_found` | no lead with that id (also for malformed ids) |
 | `404` | none (`"Not Found"`) | unknown path, including a trailing slash such as `/api/v1/leads/` |
 | `409` | `lead.duplicate` | email or phone already stored |
+| `409` | `lead.status_conflict` | `expected_status` doesn't match the lead's current status |
 | `413` | `request.too_large` | body over 16 KiB (16384 bytes); over 1 MiB (1048576 bytes) for CSV import |
 | `415` | `request.unsupported_media_type` | `Content-Type` missing or wrong: `application/json` for `POST /api/v1/leads`, `text/csv` (UTF-8) for the import |
 | `422` | `lead.invalid` | field validation failed; `errors` lists each `field` and `code` |
+| `422` | `lead.invalid_transition` | the lifecycle doesn't allow that status change |
 | `422` | `request.invalid_body` | body isn't a single JSON object (bad JSON, an array, duplicate keys, ...) |
 | `422` | `request.invalid` | bad query parameter, such as `limit=0` |
 | `422` | `import.rejected` | CSV import: some rows are invalid or duplicates; nothing was imported |
@@ -392,6 +448,7 @@ src/leadflow_ai/
   services/        lead create/get/list, duplicate handling (M2), CSV batch import (M3)
   imports/         CSV file reading and header checks (M3)
   scoring/         scoring rules (default_rules.toml), validation and the pure scoring engine (M4)
+  lifecycle/       lead statuses and the allowed transitions (M5)
   leads/           pure-Python validation and normalization (M1)
   main.py          application factory
 alembic.ini        Alembic configuration (the database URL comes from settings)
@@ -399,4 +456,4 @@ tests/             unit, database, and API tests
 docs/adr/          architectural decision records
 ```
 
-Design decisions: [ADR 0001](docs/adr/0001-m0-foundation.md) (foundation), [ADR 0002](docs/adr/0002-m1-lead-validation.md) (validation), [ADR 0003](docs/adr/0003-m2-database-and-api.md) (database and API), [ADR 0004](docs/adr/0004-m3-csv-import.md) (CSV import), [ADR 0005](docs/adr/0005-m4-lead-scoring.md) (lead scoring).
+Design decisions: [ADR 0001](docs/adr/0001-m0-foundation.md) (foundation), [ADR 0002](docs/adr/0002-m1-lead-validation.md) (validation), [ADR 0003](docs/adr/0003-m2-database-and-api.md) (database and API), [ADR 0004](docs/adr/0004-m3-csv-import.md) (CSV import), [ADR 0005](docs/adr/0005-m4-lead-scoring.md) (lead scoring), [ADR 0006](docs/adr/0006-m5-lead-lifecycle.md) (lead lifecycle).

@@ -8,8 +8,10 @@ from pydantic import BaseModel, ConfigDict
 
 from leadflow_ai.api.deps import CsvBody, JsonObjectBody, ScoringRulesDep, SessionDep
 from leadflow_ai.auth import require_operator
+from leadflow_ai.db.models import LeadEventRecord
 from leadflow_ai.imports.csv_reader import read_leads_csv
 from leadflow_ai.leads import LeadSource
+from leadflow_ai.lifecycle import LeadStatus
 from leadflow_ai.scoring.engine import score_lead
 from leadflow_ai.services.imports import import_leads
 from leadflow_ai.services.leads import (
@@ -20,6 +22,7 @@ from leadflow_ai.services.leads import (
     get_lead,
     list_leads,
 )
+from leadflow_ai.services.lifecycle import change_status, parse_status_change, read_activity
 
 PREFIX = "/api/v1/leads"
 IMPORT_PATH = f"{PREFIX}/import"
@@ -65,6 +68,36 @@ class ScoreOut(BaseModel):
     tier: Literal["hot", "warm", "cold"]
     rules_version: str
     factors: list[ScoreFactorOut]
+
+
+class LeadEventOut(BaseModel):
+    """One activity event. ``sequence`` orders events; ``occurred_at`` is UTC."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    sequence: int
+    type: Literal["lead_created", "status_changed"]
+    from_status: LeadStatus | None
+    to_status: LeadStatus
+    note: str | None
+    occurred_at: datetime
+
+
+class StatusChangeOut(BaseModel):
+    lead_id: str
+    status: LeadStatus
+    event: LeadEventOut
+
+
+class ActivityOut(BaseModel):
+    """A lead's current status and its history, oldest first."""
+
+    lead_id: str
+    status: LeadStatus
+    items: list[LeadEventOut]
+    limit: int
+    offset: int
 
 
 class ImportOut(BaseModel):
@@ -168,4 +201,90 @@ def score(lead_id: str, session: SessionDep, rules: ScoringRulesDep) -> ScoreOut
         factors=[
             ScoreFactorOut(rule=f.rule, matched=f.matched, points=f.points) for f in result.factors
         ],
+    )
+
+
+def _not_found() -> HTTPException:
+    return HTTPException(
+        status_code=404, detail={"code": "lead.not_found", "message": "Lead not found"}
+    )
+
+
+def _event_out(event: LeadEventRecord) -> LeadEventOut:
+    # model_validate checks event_type against the Literal at runtime (no type: ignore).
+    return LeadEventOut.model_validate(
+        {
+            "id": event.id,
+            "sequence": event.sequence,
+            "type": event.event_type,
+            "from_status": event.from_status,
+            "to_status": event.to_status,
+            "note": event.note,
+            "occurred_at": event.occurred_at,
+        }
+    )
+
+
+@router.post(
+    "/{lead_id}/status",
+    response_model=StatusChangeOut,
+    summary="Change a lead's status (requires the expected current status)",
+    openapi_extra={
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": ["status", "expected_status"],
+                        "properties": {
+                            "status": {"type": "string", "enum": [s.value for s in LeadStatus]},
+                            "expected_status": {
+                                "type": "string",
+                                "enum": [s.value for s in LeadStatus],
+                            },
+                            "note": {"type": "string", "maxLength": 500},
+                        },
+                    }
+                }
+            },
+        }
+    },
+)
+def change_lead_status(
+    lead_id: str, payload: JsonObjectBody, session: SessionDep
+) -> StatusChangeOut:
+    request = parse_status_change(payload)
+    record = get_lead(session, lead_id)
+    if record is None:
+        raise _not_found()
+    event = change_status(session, record, request)
+    return StatusChangeOut(
+        lead_id=record.id, status=LeadStatus(record.status), event=_event_out(event)
+    )
+
+
+@router.get(
+    "/{lead_id}/activity",
+    response_model=ActivityOut,
+    summary="A lead's current status and activity history, oldest first",
+)
+def lead_activity(
+    lead_id: str,
+    session: SessionDep,
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_LIMIT)] = DEFAULT_PAGE_LIMIT,
+    offset: Annotated[int, Query(ge=0, le=MAX_OFFSET)] = 0,
+) -> ActivityOut:
+    record = get_lead(session, lead_id)
+    if record is None:
+        raise _not_found()
+    # Status and items come from one consistent read (see read_activity).
+    page = read_activity(session, record.id, limit=limit, offset=offset)
+    return ActivityOut(
+        lead_id=record.id,
+        status=page.status,
+        items=[_event_out(event) for event in page.events],
+        limit=limit,
+        offset=offset,
     )

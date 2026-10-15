@@ -71,6 +71,7 @@ def test_naming_convention_is_applied() -> None:
         "ck_leads_contact_required",
         "ck_leads_source_allowed",
         "ck_leads_email_lowercase",
+        "ck_leads_status_allowed",
     }
 
 
