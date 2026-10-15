@@ -45,6 +45,9 @@ def _isolate_environment(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.delenv("LEADFLOW_OPERATOR_TOKEN", raising=False)
     monkeypatch.delenv("LEADFLOW_DATABASE_URL", raising=False)
     monkeypatch.delenv("LEADFLOW_SCORING_RULES_PATH", raising=False)
+    monkeypatch.delenv("LEADFLOW_LLM_URL", raising=False)
+    monkeypatch.delenv("LEADFLOW_LLM_MODEL", raising=False)
+    monkeypatch.delenv("LEADFLOW_LLM_TIMEOUT_SECONDS", raising=False)
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()

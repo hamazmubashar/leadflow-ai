@@ -22,6 +22,7 @@ from leadflow_ai.drafts import (
     MAX_BODY_LENGTH,
     MAX_SUBJECT_LENGTH,
     OUTBOX_STATUS_SIMULATED,
+    DraftGenerator,
     DraftStatus,
     DraftTemplate,
 )
@@ -188,6 +189,15 @@ class LeadDraftRecord(Base):
     rejection_reason: Mapped[str | None] = mapped_column(String(500))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=_utc_now)
     decided_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    # M9 provenance (migration 0005). The insert trigger allows exactly two shapes:
+    # template (model and prompt_version NULL) or local_llm (both set, pending_review).
+    generator: Mapped[str] = mapped_column(
+        String(20),
+        default=DraftGenerator.TEMPLATE.value,
+        server_default=DraftGenerator.TEMPLATE.value,
+    )
+    model: Mapped[str | None] = mapped_column(String(100))
+    prompt_version: Mapped[str | None] = mapped_column(String(32))
 
     def __repr__(self) -> str:
         # Never include the recipient, text or rejection reason.

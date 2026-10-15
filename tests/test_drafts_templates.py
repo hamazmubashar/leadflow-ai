@@ -178,7 +178,35 @@ def test_every_m6_module_is_checked() -> None:
     assert found == set(ALLOWED_IMPORTS)
 
 
+# M9: the single, approved exception. The local-model client may use urllib/http to
+# reach a loopback-only URL (validated at startup; proxies and redirects refused; see
+# tests/test_assist_ollama.py and tests/test_config_llm.py). Nothing else may.
+NETWORK_EXCEPTIONS = {"assist/ollama.py": {"urllib", "http"}}
+# Pure string parsing, no I/O: config.py uses it to validate the model URL.
+PURE_SUBMODULES = {"urllib.parse"}
+
+
+def _network_top_levels(path: Path) -> set[str]:
+    modules = {m for m in _imports(path) if m not in PURE_SUBMODULES}
+    return {m.split(".")[0] for m in modules} & NETWORK_MODULES
+
+
 def test_no_module_in_the_package_imports_network_libraries() -> None:
     for path in sorted(PACKAGE_DIR.rglob("*.py")):
-        top_level = {m.split(".")[0] for m in _imports(path)}
-        assert not top_level & NETWORK_MODULES, path
+        relative = str(path.relative_to(PACKAGE_DIR))
+        allowed = NETWORK_EXCEPTIONS.get(relative, set())
+        assert not _network_top_levels(path) - allowed, path
+
+
+def test_the_network_exception_is_exactly_the_local_model_client() -> None:
+    for relative, allowed in NETWORK_EXCEPTIONS.items():
+        # No stale or wider exception.
+        assert _network_top_levels(PACKAGE_DIR / relative) == allowed, relative
+    # Outside the assist package, only the AI-draft service uses it.
+    importers = {
+        str(path.relative_to(PACKAGE_DIR))
+        for path in PACKAGE_DIR.rglob("*.py")
+        if not str(path.relative_to(PACKAGE_DIR)).startswith("assist/")
+        and any(m.startswith("leadflow_ai.assist") for m in _imports(path))
+    }
+    assert importers == {"services/ai_drafts.py"}

@@ -36,6 +36,13 @@ class DraftTemplate(StrEnum):
     FOLLOW_UP = "follow_up"
 
 
+class DraftGenerator(StrEnum):
+    """How a draft's body was produced (M9). Subject and recipient never depend on it."""
+
+    TEMPLATE = "template"
+    LOCAL_LLM = "local_llm"
+
+
 class DraftStatus(StrEnum):
     """``pending_review`` is the only non-final status."""
 

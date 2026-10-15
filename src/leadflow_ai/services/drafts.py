@@ -35,6 +35,7 @@ from leadflow_ai.drafts import (
     ELIGIBLE_LEAD_STATUSES,
     OUTBOX_STATUS_SIMULATED,
     TEMPLATE_VERSION,
+    DraftGenerator,
     DraftStatus,
     DraftTemplate,
     render_draft,
@@ -57,6 +58,16 @@ class OutboxItem:
 
     message: OutboxMessageRecord
     draft: LeadDraftRecord
+
+
+@dataclass(frozen=True, slots=True)
+class GeneratedBody:
+    """An AI-generated body (M9) and its provenance. Only the body is generated:
+    the subject and recipient of an AI draft are the same as for the template."""
+
+    body: str
+    model: str
+    prompt_version: str
 
 
 class LeadHasNoEmailError(Exception):
@@ -164,7 +175,11 @@ def is_pending_conflict(exc: IntegrityError) -> bool:
 
 
 def stage_pending_draft(
-    session: Session, lead: LeadRecord, template: DraftTemplate
+    session: Session,
+    lead: LeadRecord,
+    template: DraftTemplate,
+    *,
+    generated: GeneratedBody | None = None,
 ) -> LeadDraftRecord:
     """Add a pending draft to the session's transaction **without committing**.
 
@@ -174,6 +189,9 @@ def stage_pending_draft(
     for which ``is_pending_conflict`` is true means another pending draft won.
     Raises LeadHasNoEmailError, LeadNotEligibleError or PendingDraftExistsError,
     after rolling back the transaction.
+
+    ``generated`` (M9) replaces only the body and records its provenance; without it
+    the draft is a template draft, exactly as before (the M8 workflow never passes it).
     """
     if lead.email is None:
         raise LeadHasNoEmailError
@@ -202,11 +220,16 @@ def stage_pending_draft(
         channel=CHANNEL_EMAIL,
         recipient=lead.email,
         subject=rendered.subject,
-        body=rendered.body,
+        body=rendered.body if generated is None else generated.body,
         status=_PENDING,
         rejection_reason=None,
         created_at=datetime.now(UTC),
         decided_at=None,
+        generator=(
+            DraftGenerator.TEMPLATE if generated is None else DraftGenerator.LOCAL_LLM
+        ).value,
+        model=None if generated is None else generated.model,
+        prompt_version=None if generated is None else generated.prompt_version,
     )
     session.add(draft)
     return draft

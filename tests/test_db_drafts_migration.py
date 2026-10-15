@@ -123,6 +123,10 @@ def test_columns_match_the_approved_schema(migrated_engine: Engine) -> None:
         "rejection_reason": ("VARCHAR(500)", True),
         "created_at": ("DATETIME", False),
         "decided_at": ("DATETIME", True),
+        # Added by 0005 (M9 provenance); see test_db_draft_provenance_migration.py.
+        "generator": ("VARCHAR(20)", False),
+        "model": ("VARCHAR(100)", True),
+        "prompt_version": ("VARCHAR(32)", True),
     }
     # No content columns and no delivery fields (sent_at, attempts, ...) on the outbox.
     assert columns("outbox_messages") == {
@@ -191,7 +195,8 @@ def test_triggers_exist(migrated_engine: Engine) -> None:
                 " AND tbl_name IN ('lead_drafts', 'outbox_messages')"
             )
         ).scalars()
-        assert set(names) == TRIGGERS
+        # 0005 recreates trg_lead_drafts_content_immutable and adds the provenance trigger.
+        assert set(names) == TRIGGERS | {"trg_lead_drafts_provenance_valid"}
 
 
 # --- CHECK, UNIQUE and foreign key constraints --------------------------------------------
