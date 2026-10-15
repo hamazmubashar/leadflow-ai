@@ -15,7 +15,21 @@ import requests
 from pydantic import BaseModel, ValidationError
 
 from dashboard.config import DashboardSettings
-from dashboard.models import Activity, DraftPage, Lead, LeadPage, Score
+from dashboard.models import (
+    Activity,
+    Approval,
+    Draft,
+    DraftPage,
+    DraftTemplate,
+    ImportResult,
+    Lead,
+    LeadPage,
+    LeadStatus,
+    OutboxMessage,
+    OutboxPage,
+    Score,
+    StatusChange,
+)
 
 CONNECT_TIMEOUT_SECONDS = 3.05
 MAX_PAGE_LIMIT = 100  # the API's maximum ``limit`` for every list endpoint
@@ -86,6 +100,7 @@ class HttpSession(Protocol):
         *,
         params: dict[str, str | int] | None = None,
         json: JsonObject | None = None,
+        data: bytes | None = None,
         headers: dict[str, str] | None = None,
         timeout: tuple[float, float] | None = None,
         allow_redirects: bool = True,
@@ -165,6 +180,69 @@ class ApiClient:
         """``POST /api/v1/leads``. Sent once; never retried (a retry could duplicate it)."""
         return _validate(Lead, self._request("POST", "/api/v1/leads", json=dict(payload)))
 
+    def change_status(
+        self,
+        lead_id: str,
+        *,
+        status: LeadStatus,
+        expected_status: LeadStatus,
+        note: str | None = None,
+    ) -> StatusChange:
+        """``POST /api/v1/leads/{id}/status``. ``expected_status`` guards against lost updates."""
+        body: JsonObject = {"status": status.value, "expected_status": expected_status.value}
+        if note:
+            body["note"] = note
+        return _validate(
+            StatusChange,
+            self._request("POST", f"/api/v1/leads/{_segment(lead_id)}/status", json=body),
+        )
+
+    def import_csv(self, content: bytes) -> ImportResult:
+        """``POST /api/v1/leads/import``: the raw file, all or nothing. Never retried."""
+        return _validate(
+            ImportResult,
+            self._request(
+                "POST", "/api/v1/leads/import", data=content, content_type="text/csv; charset=utf-8"
+            ),
+        )
+
+    def create_draft(self, lead_id: str, template: DraftTemplate) -> Draft:
+        """``POST /api/v1/leads/{id}/drafts``: renders a fixed template; awaits human review."""
+        return _validate(
+            Draft,
+            self._request(
+                "POST",
+                f"/api/v1/leads/{_segment(lead_id)}/drafts",
+                json={"template": template.value},
+            ),
+        )
+
+    def get_draft(self, draft_id: str) -> Draft:
+        return _validate(Draft, self._request("GET", f"/api/v1/drafts/{_segment(draft_id)}"))
+
+    def approve_draft(self, draft_id: str) -> Approval:
+        """``POST /api/v1/drafts/{id}/approve``: records a simulated item (nothing is sent)."""
+        return _validate(
+            Approval, self._request("POST", f"/api/v1/drafts/{_segment(draft_id)}/approve")
+        )
+
+    def reject_draft(self, draft_id: str, reason: str | None = None) -> Draft:
+        body: JsonObject = {"reason": reason} if reason else {}
+        return _validate(
+            Draft,
+            self._request("POST", f"/api/v1/drafts/{_segment(draft_id)}/reject", json=body),
+        )
+
+    def list_outbox(self, *, limit: int = MAX_PAGE_LIMIT, offset: int = 0) -> OutboxPage:
+        """``GET /api/v1/outbox``: simulated items, newest first."""
+        body = self._request("GET", "/api/v1/outbox", params={"limit": limit, "offset": offset})
+        return _validate(OutboxPage, body)
+
+    def get_outbox_message(self, message_id: str) -> OutboxMessage:
+        return _validate(
+            OutboxMessage, self._request("GET", f"/api/v1/outbox/{_segment(message_id)}")
+        )
+
     # --- transport ----------------------------------------------------------------------
 
     def _request(
@@ -175,8 +253,12 @@ class ApiClient:
         auth: bool = True,
         params: dict[str, str | int] | None = None,
         json: JsonObject | None = None,
+        data: bytes | None = None,
+        content_type: str | None = None,
     ) -> JsonObject:
         headers = {"Accept": "application/json"}
+        if content_type is not None:
+            headers["Content-Type"] = content_type
         if auth:
             headers["Authorization"] = f"Bearer {self._token.get_secret_value()}"
         try:
@@ -185,6 +267,7 @@ class ApiClient:
                 f"{self._base_url}{path}",
                 params=params,
                 json=json,
+                data=data,
                 headers=headers,
                 timeout=self._timeout,
                 allow_redirects=False,  # never forward the token to another location

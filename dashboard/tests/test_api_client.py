@@ -17,6 +17,7 @@ from dashboard.api_client import (
     JsonObject,
 )
 from dashboard.config import DashboardSettings
+from dashboard.models import DraftStatus, DraftTemplate, LeadStatus
 
 TOKEN = "client-test-token-" + "y" * 24
 BASE = "http://127.0.0.1:8000"
@@ -49,6 +50,7 @@ class FakeSession:
         *,
         params: dict[str, str | int] | None = None,
         json: JsonObject | None = None,
+        data: bytes | None = None,
         headers: dict[str, str] | None = None,
         timeout: tuple[float, float] | None = None,
         allow_redirects: bool = True,
@@ -59,6 +61,7 @@ class FakeSession:
                 "url": url,
                 "params": params,
                 "json": json,
+                "data": data,
                 "headers": headers or {},
                 "timeout": timeout,
                 "allow_redirects": allow_redirects,
@@ -324,3 +327,136 @@ def test_list_lead_drafts_parses_drafts() -> None:
     page = client.list_lead_drafts("x")
     assert session.calls[0]["url"] == f"{BASE}/api/v1/leads/x/drafts"
     assert page.items[0].status.value == "pending_review"
+
+
+# --- writes: status, import, drafts, outbox -----------------------------------------------
+
+EVENT = {
+    "id": "e2",
+    "sequence": 2,
+    "type": "status_changed",
+    "from_status": "new",
+    "to_status": "contacted",
+    "note": None,
+    "occurred_at": "2026-10-15T12:00:00Z",
+}
+DRAFT = {
+    "id": "d1",
+    "lead_id": "x",
+    "template": "introduction",
+    "template_version": "1",
+    "channel": "email",
+    "recipient": "test@example.com",
+    "subject": "Hi",
+    "body": "Body",
+    "status": "approved",
+    "rejection_reason": None,
+    "created_at": "2026-10-15T12:00:00Z",
+    "decided_at": "2026-10-15T12:05:00Z",
+}
+OUTBOX = {
+    "id": "o1",
+    "draft_id": "d1",
+    "lead_id": "x",
+    "status": "simulated",
+    "recipient": "test@example.com",
+    "subject": "Hi",
+    "body": "Body",
+    "created_at": "2026-10-15T12:05:00Z",
+}
+
+
+def test_change_status_sends_expected_status_and_optional_note() -> None:
+    client, session = client_for(
+        respond(200, {"lead_id": "x", "status": "contacted", "event": EVENT})
+    )
+    result = client.change_status(
+        "x", status=LeadStatus.CONTACTED, expected_status=LeadStatus.NEW, note="Called"
+    )
+    call = session.calls[0]
+    assert (call["method"], call["url"]) == ("POST", f"{BASE}/api/v1/leads/x/status")
+    assert call["json"] == {"status": "contacted", "expected_status": "new", "note": "Called"}
+    assert result.event.sequence == 2
+
+
+def test_change_status_omits_an_empty_note() -> None:
+    client, session = client_for(
+        respond(200, {"lead_id": "x", "status": "contacted", "event": EVENT})
+    )
+    client.change_status("x", status=LeadStatus.CONTACTED, expected_status=LeadStatus.NEW)
+    assert "note" not in session.calls[0]["json"]
+
+
+def test_status_conflict_keeps_the_current_status_in_detail() -> None:
+    detail = {"code": "lead.status_conflict", "message": "reload", "current_status": "lost"}
+    client, _ = client_for(respond(409, {"detail": detail}))
+    error = raised(
+        lambda: client.change_status(
+            "x", status=LeadStatus.CONTACTED, expected_status=LeadStatus.NEW
+        )
+    )
+    assert error.code == "lead.status_conflict"
+    assert error.detail is not None and error.detail["current_status"] == "lost"
+
+
+def test_import_sends_the_raw_file_as_csv() -> None:
+    client, session = client_for(respond(201, {"imported": 2, "lead_ids": ["a", "b"]}))
+    result = client.import_csv(b"full_name,email\nA,a@example.com\n")
+    call = session.calls[0]
+    assert (call["method"], call["url"]) == ("POST", f"{BASE}/api/v1/leads/import")
+    assert call["data"] == b"full_name,email\nA,a@example.com\n"
+    assert call["json"] is None
+    assert call["headers"]["Content-Type"] == "text/csv; charset=utf-8"
+    assert result.imported == 2
+
+
+def test_import_is_not_retried_after_a_timeout() -> None:
+    client, session = client_for(requests.ReadTimeout("slow"))
+    assert raised(lambda: client.import_csv(b"x")).kind is ApiErrorKind.TIMEOUT
+    assert len(session.calls) == 1
+
+
+def test_create_draft_sends_the_template() -> None:
+    client, session = client_for(respond(201, {**DRAFT, "status": "pending_review"}))
+    draft = client.create_draft("x", DraftTemplate.FOLLOW_UP)
+    assert session.calls[0]["url"] == f"{BASE}/api/v1/leads/x/drafts"
+    assert session.calls[0]["json"] == {"template": "follow_up"}
+    assert draft.status is DraftStatus.PENDING_REVIEW
+
+
+def test_approve_returns_the_draft_and_its_simulated_outbox_item() -> None:
+    client, session = client_for(respond(200, {"draft": DRAFT, "outbox_message": OUTBOX}))
+    approval = client.approve_draft("d1")
+    call = session.calls[0]
+    assert (call["method"], call["url"], call["json"]) == (
+        "POST",
+        f"{BASE}/api/v1/drafts/d1/approve",
+        None,
+    )
+    assert approval.outbox_message.status == "simulated"
+
+
+def test_reject_sends_reason_only_when_given() -> None:
+    client, session = client_for(respond(200, {**DRAFT, "status": "rejected"}))
+    client.reject_draft("d1")
+    client.reject_draft("d1", "Wrong tone")
+    assert [call["json"] for call in session.calls] == [{}, {"reason": "Wrong tone"}]
+
+
+def test_get_draft_and_outbox_endpoints() -> None:
+    client, session = client_for(respond(200, DRAFT))
+    assert client.get_draft("d/1").id == "d1"
+    assert session.calls[0]["url"] == f"{BASE}/api/v1/drafts/d%2F1"
+
+    client, session = client_for(respond(200, {"items": [OUTBOX], "limit": 100, "offset": 0}))
+    assert client.list_outbox().items[0].draft_id == "d1"
+    assert session.calls[0]["params"] == {"limit": 100, "offset": 0}
+
+    client, session = client_for(respond(200, OUTBOX))
+    assert client.get_outbox_message("o1").recipient == "test@example.com"
+    assert session.calls[0]["url"] == f"{BASE}/api/v1/outbox/o1"
+
+
+def test_an_outbox_item_that_is_not_simulated_is_rejected() -> None:
+    client, _ = client_for(respond(200, {**OUTBOX, "status": "sent"}))
+    assert raised(lambda: client.get_outbox_message("o1")).kind is ApiErrorKind.INVALID_RESPONSE

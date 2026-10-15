@@ -11,6 +11,7 @@ from typing import Any
 
 import streamlit as st
 
+from dashboard import nav
 from dashboard.api_client import ApiError
 from dashboard.leads import TEMPLATE_LABELS, DraftItem, FeedEvent, LeadSnapshot
 from dashboard.models import DraftStatus, LeadStatus
@@ -18,6 +19,7 @@ from dashboard.overview import PERIODS, Overview, build_overview, rows_in_period
 from dashboard.runtime import clear_lead_data, lead_snapshot, require_client
 from dashboard.ui import (
     BORDER,
+    COLD,
     DANGER,
     MUTED,
     ORANGE,
@@ -42,7 +44,6 @@ STATUS_COLORS = {
     LeadStatus.WON: "#199e70",
     LeadStatus.LOST: "#e66767",
 }
-COLD_BLUE = "#3987e5"
 DRAFT_TONES = {
     DraftStatus.PENDING_REVIEW: (Tone.WARNING, "Pending review"),
     DraftStatus.APPROVED: (Tone.SUCCESS, "Approved"),
@@ -88,10 +89,16 @@ def render() -> None:
 
     left, right = st.columns([3, 2])
     with left, st.container(border=True):
-        st.markdown("**Recent activity**")
+        title_col, link_col = st.columns([3, 1], vertical_alignment="center")
+        title_col.markdown("**Recent activity**")
+        with link_col:
+            nav.link("activity", "View all")
         _activity_feed(snapshot.events, now)
     with right, st.container(border=True):
-        st.markdown(f"**Recent drafts** · {snapshot.pending_drafts} awaiting review")
+        title_col, link_col = st.columns([3, 1], vertical_alignment="center")
+        title_col.markdown(f"**Recent drafts** · {snapshot.pending_drafts} awaiting review")
+        with link_col:
+            nav.link("drafts", "Review")
         _draft_feed(snapshot.drafts, now)
 
     _footer(snapshot)
@@ -109,7 +116,7 @@ def _kpis(overview: Overview, period: str) -> None:
     for column, label, count, accent in (
         (hot, "Hot leads", overview.hot, DANGER),
         (warm, "Warm leads", overview.warm, WARNING),
-        (cold, "Cold leads", overview.cold, COLD_BLUE),
+        (cold, "Cold leads", overview.cold, COLD),
     ):
         with column:
             kpi_card(label, str(count), f"{share(count, overview.total)} of leads", accent)

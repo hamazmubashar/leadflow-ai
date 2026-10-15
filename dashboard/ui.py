@@ -22,6 +22,7 @@ WARNING = "#F59E0B"
 DANGER = "#EF4444"
 TEXT = "#F8FAFC"
 MUTED = "#94A3B8"
+COLD = "#3987e5"  # cold tier: the validated chart blue
 
 _MARKDOWN_SPECIAL = re.compile(r"([\\`*_{}\[\]()#+\-.!|<>~$:])")
 
@@ -82,7 +83,16 @@ def apply_theme() -> None:
 
 
 def brand() -> None:
-    st.markdown('<div class="lf-brand">LeadFlow <span>AI</span></div>', unsafe_allow_html=True)
+    logo = (
+        '<svg width="22" height="20" viewBox="0 0 22 20" aria-hidden="true" '
+        'style="vertical-align:-2px;margin-right:8px">'
+        f'<rect x="0" y="12" width="5" height="8" rx="1.5" fill="{ORANGE}"/>'
+        f'<rect x="8" y="6" width="5" height="14" rx="1.5" fill="{ORANGE}"/>'
+        f'<rect x="16" y="0" width="5" height="20" rx="1.5" fill="{ORANGE}"/></svg>'
+    )
+    st.markdown(
+        f'<div class="lf-brand">{logo}LeadFlow <span>AI</span></div>', unsafe_allow_html=True
+    )
 
 
 def page_header(title: str, subtitle: str = "") -> None:
@@ -149,3 +159,34 @@ def cell(text: str, *, muted: bool = False, small: str = "") -> str:
     second = f'<br><span class="lf-small">{html.escape(small)}</span>' if small else ""
     css = ' class="lf-muted"' if muted else ""
     return f"<td{css}>{html.escape(text)}{second}</td>"
+
+
+def show_error_lines(title: str, lines: list[str]) -> None:
+    """An error alert: a fixed title plus one escaped bullet per line."""
+    bullets = "  \n".join(f"- {escape_markdown(line)}" for line in lines)
+    st.error(f"{escape_markdown(title)}  \n{bullets}", icon=":material/error:")
+
+
+def set_flash(key: str, message: str) -> None:
+    """Store a success message to show once after the next rerun (plain text, escaped later)."""
+    st.session_state[key] = message
+
+
+def show_flash(key: str) -> None:
+    message = st.session_state.pop(key, None)
+    if isinstance(message, str):
+        st.success(escape_markdown(message), icon=":material/check_circle:")
+
+
+def status_tone(status: str) -> Tone:
+    """Pill colour for a lead status value (identity only; the label always carries the name)."""
+    return {
+        "won": Tone.SUCCESS,
+        "lost": Tone.DANGER,
+        "qualified": Tone.ACCENT,
+        "contacted": Tone.WARNING,
+    }.get(status, Tone.NEUTRAL)
+
+
+def tier_tone(tier: str) -> Tone:
+    return {"hot": Tone.DANGER, "warm": Tone.WARNING}.get(tier, Tone.NEUTRAL)

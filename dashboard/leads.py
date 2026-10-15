@@ -16,19 +16,22 @@ from typing import Protocol
 from dashboard.api_client import MAX_PAGE_LIMIT, ApiError, ApiErrorKind
 from dashboard.models import (
     Activity,
+    Draft,
     DraftPage,
     DraftStatus,
     DraftTemplate,
     Lead,
+    LeadEvent,
     LeadPage,
     LeadSource,
     LeadStatus,
     Score,
+    ScoreFactor,
     Tier,
 )
 
 MAX_LEADS = 500
-MAX_FEED_ITEMS = 50  # newest activity events / drafts kept for the dashboard
+MAX_FEED_ITEMS = 1000  # newest activity events / drafts kept for the feed pages
 
 FIELD_LABELS = {
     "full_name": "Full name",
@@ -37,6 +40,11 @@ FIELD_LABELS = {
     "company": "Company",
     "source": "Source",
     "notes": "Notes",
+    "status": "Status",
+    "expected_status": "Expected status",
+    "note": "Note",
+    "template": "Template",
+    "reason": "Reason",
 }
 SOURCE_LABELS = {
     LeadSource.WEB_FORM: "Web form",
@@ -74,6 +82,8 @@ class LeadRow:
     score: int
     tier: Tier
     created_at: datetime
+    rules_version: str = ""
+    factors: tuple[ScoreFactor, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -97,6 +107,16 @@ class DraftItem:
     status: DraftStatus
     created_at: datetime
     decided_at: datetime | None
+
+
+@dataclass(frozen=True)
+class LeadDetail:
+    """One lead, read fresh from the API (never from the cache) before any change to it."""
+
+    status: LeadStatus
+    events: tuple[LeadEvent, ...]  # oldest first, complete
+    score: Score
+    drafts: tuple[Draft, ...]  # newest first
 
 
 @dataclass(frozen=True)
@@ -158,6 +178,8 @@ def fetch_lead_snapshot(client: LeadReader, *, max_leads: int = MAX_LEADS) -> Le
                 score=score.score,
                 tier=score.tier,
                 created_at=lead.created_at,
+                rules_version=score.rules_version,
+                factors=tuple(score.factors),
             )
         )
     events.extend(_draft_events(drafts))
@@ -281,3 +303,69 @@ def describe_create_error(error: ApiError) -> list[str]:
         which = " and ".join(fields) if fields else "email or phone"
         return [f"A lead with this {which} already exists. Nothing was saved or merged."]
     return [error.message]
+
+
+_RULE_LABELS = {
+    "has_email": "Has an email address",
+    "has_phone": "Has a phone number",
+    "has_company": "Has a company name",
+    "non_free_email_domain": "Email domain is not a free provider",
+}
+
+
+def rule_label(rule: str) -> str:
+    """A readable name for a scoring rule id from the API (unknown ids are shown as-is)."""
+    if rule.startswith("source."):
+        source = rule.removeprefix("source.")
+        try:
+            return f"Source: {SOURCE_LABELS[LeadSource(source)]}"
+        except ValueError:
+            return f"Source: {source}"
+    return _RULE_LABELS.get(rule, rule)
+
+
+def describe_api_error(error: ApiError) -> list[str]:
+    """Short, safe lines for any failed write (status change, draft, review).
+
+    Field errors and duplicates get their own wording; workflow conflicts use the API's
+    fixed message plus the structured facts it returns (never submitted values).
+    """
+    detail = error.detail or {}
+    if error.code == "lead.status_conflict":
+        current = str(detail.get("current_status", "")).title() or "another status"
+        return [
+            f"Someone else changed this lead's status to {current} first. "
+            "Nothing was written. Reload the lead to see its current status, then decide again."
+        ]
+    if error.code == "lead.invalid_transition":
+        allowed = [str(item).title() for item in detail.get("allowed") or []]
+        target = str(detail.get("to_status", "")).title()
+        current = str(detail.get("from_status", "")).title()
+        options = ", ".join(allowed) if allowed else "none (this status is final)"
+        return [f"{current} → {target} is not an allowed change. Allowed next: {options}."]
+    if error.code == "draft.lead_not_eligible":
+        status = str(detail.get("lead_status", "")).title()
+        return [f"{error.message} (this lead is {status})."]
+    if error.code == "draft.already_decided":
+        status = str(detail.get("status", "")).replace("_", " ")
+        return [f"{error.message}: it is already {status}. Nothing was changed."]
+    return describe_create_error(error)
+
+
+def fetch_lead_detail(client: LeadReader, lead_id: str) -> LeadDetail:
+    """Current status, the full history (all pages), score and drafts of one lead."""
+    events: list[LeadEvent] = []
+    offset = 0
+    while True:
+        activity = client.get_activity(lead_id, limit=MAX_PAGE_LIMIT, offset=offset)
+        events.extend(activity.items)
+        if len(activity.items) < MAX_PAGE_LIMIT:
+            break
+        offset += MAX_PAGE_LIMIT
+    drafts = client.list_lead_drafts(lead_id, limit=MAX_PAGE_LIMIT).items
+    return LeadDetail(
+        status=activity.status,
+        events=tuple(events),
+        score=client.get_score(lead_id),
+        drafts=tuple(drafts),
+    )

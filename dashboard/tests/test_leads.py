@@ -7,9 +7,12 @@ from dashboard.api_client import ApiError, ApiErrorKind
 from dashboard.leads import (
     LeadRow,
     build_create_payload,
+    describe_api_error,
     describe_create_error,
+    fetch_lead_detail,
     fetch_lead_snapshot,
     filter_rows,
+    rule_label,
 )
 from dashboard.models import (
     Activity,
@@ -292,6 +295,107 @@ def test_feed_merges_history_and_draft_decisions_newest_first() -> None:
     assert {d.status for d in snapshot.drafts} == {DraftStatus.APPROVED, DraftStatus.PENDING_REVIEW}
 
 
-def test_feed_is_capped() -> None:
+def test_feed_is_capped(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("dashboard.leads.MAX_FEED_ITEMS", 50)
     snapshot = fetch_lead_snapshot(FakeReader([make_lead(n) for n in range(80)]))
     assert len(snapshot.events) == 50
+
+
+# --- lead detail ---------------------------------------------------------------------------
+
+
+@dataclass
+class PagedHistoryReader(FakeReader):
+    """Serves 230 history events in pages, like the API."""
+
+    def get_activity(self, lead_id: str, *, limit: int = 1, offset: int = 0) -> Activity:
+        self.calls.append(("activity", (limit, offset)))
+        items = [
+            LeadEvent(
+                id=f"e{n}",
+                sequence=n,
+                type="status_changed",
+                from_status=LeadStatus.NEW,
+                to_status=LeadStatus.CONTACTED,
+                note=None,
+                occurred_at=CREATED,
+            )
+            for n in range(1, 231)
+        ][offset : offset + limit]
+        return Activity(
+            lead_id=lead_id, status=LeadStatus.QUALIFIED, items=items, limit=limit, offset=offset
+        )
+
+
+def test_detail_reads_every_history_page() -> None:
+    reader = PagedHistoryReader([make_lead(1)])
+    detail = fetch_lead_detail(reader, "lead-1")
+    assert [c for c in reader.calls if c[0] == "activity"] == [
+        ("activity", (100, 0)),
+        ("activity", (100, 100)),
+        ("activity", (100, 200)),
+    ]
+    assert len(detail.events) == 230
+    assert detail.events[0].sequence == 1
+    assert detail.status is LeadStatus.QUALIFIED
+    assert detail.score.lead_id == "lead-1"
+
+
+def test_snapshot_rows_keep_the_score_breakdown() -> None:
+    snapshot = fetch_lead_snapshot(FakeReader([make_lead(3)]))
+    assert snapshot.rows[0].rules_version == "v"
+    assert snapshot.rows[0].factors == ()
+
+
+@pytest.mark.parametrize(
+    ("rule", "label"),
+    [
+        ("source.web_form", "Source: Web form"),
+        ("source.carrier", "Source: carrier"),
+        ("has_email", "Has an email address"),
+        ("non_free_email_domain", "Email domain is not a free provider"),
+        ("future_rule", "future_rule"),
+    ],
+)
+def test_rule_labels(rule: str, label: str) -> None:
+    assert rule_label(rule) == label
+
+
+def coded(code: str, http_status: int, **detail: object) -> ApiError:
+    return ApiError(
+        ApiErrorKind.HTTP_ERROR,
+        "API message",
+        status_code=http_status,
+        code=code,
+        detail={"code": code, **detail},
+    )
+
+
+def test_status_conflict_names_the_current_status() -> None:
+    (line,) = describe_api_error(coded("lead.status_conflict", 409, current_status="lost"))
+    assert "Lost" in line and "Nothing was written" in line
+
+
+def test_invalid_transition_lists_what_is_allowed() -> None:
+    error = coded(
+        "lead.invalid_transition",
+        422,
+        from_status="contacted",
+        to_status="won",
+        allowed=["qualified", "lost"],
+    )
+    assert describe_api_error(error) == [
+        "Contacted → Won is not an allowed change. Allowed next: Qualified, Lost."
+    ]
+    final = coded("lead.invalid_transition", 422, from_status="won", to_status="lost", allowed=[])
+    assert "none (this status is final)" in describe_api_error(final)[0]
+
+
+def test_draft_conflicts_use_api_facts() -> None:
+    assert describe_api_error(coded("draft.lead_not_eligible", 409, lead_status="won")) == [
+        "API message (this lead is Won)."
+    ]
+    assert describe_api_error(coded("draft.already_decided", 409, status="approved")) == [
+        "API message: it is already approved. Nothing was changed."
+    ]
+    assert describe_api_error(coded("draft.pending_exists", 409)) == ["API message"]

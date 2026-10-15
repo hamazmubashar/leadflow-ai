@@ -23,3 +23,6 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run mypy
       - run: uv run pytest
+      # Dashboard (M7): needs the ui dependency group
+      - run: uv run --locked --group ui mypy dashboard
+      - run: uv run --locked --group ui pytest dashboard/tests --no-cov -p no:cacheprovider

@@ -1,4 +1,4 @@
-"""Leads: the full lead list with status and score, search and filters, and a create form."""
+"""Leads: the lead list with status and score, search, filters, a create form and details."""
 
 from typing import get_args
 
@@ -15,18 +15,21 @@ from dashboard.leads import (
 )
 from dashboard.models import LeadSource, LeadStatus, Tier
 from dashboard.runtime import clear_lead_data, lead_snapshot, require_client
-from dashboard.ui import escape_markdown, page_header, show_api_error
-
-_FLASH_KEY = "leads.flash"
+from dashboard.ui import (
+    page_header,
+    set_flash,
+    show_api_error,
+    show_error_lines,
+    show_flash,
+)
+from dashboard.views.lead_detail import FLASH_KEY, render_lead_detail
 
 
 def render() -> None:
     page_header("Leads", "Every lead from the API, with its current status and score.")
     client = require_client()
 
-    flash = st.session_state.pop(_FLASH_KEY, None)
-    if isinstance(flash, str):
-        st.success(flash, icon=":material/check_circle:")
+    show_flash(FLASH_KEY)
 
     _create_form(client)
 
@@ -77,11 +80,16 @@ def render() -> None:
     if not rows:
         st.info("No leads match these filters.", icon=":material/filter_alt_off:")
         return
-    _lead_table(rows)
+    selected = _lead_table(rows)
+    if selected is None:
+        st.caption(":material/touch_app: Select a row to open the lead's details.")
+    else:
+        render_lead_detail(client, selected)
 
 
-def _lead_table(rows: list[LeadRow]) -> None:
-    st.dataframe(
+def _lead_table(rows: list[LeadRow]) -> LeadRow | None:
+    """Show the table; return the row the operator selected, if any."""
+    event = st.dataframe(
         [
             {
                 "Name": row.full_name,
@@ -106,7 +114,12 @@ def _lead_table(rows: list[LeadRow]) -> None:
                 "Created (UTC)", format="YYYY-MM-DD HH:mm"
             ),
         },
+        on_select="rerun",
+        selection_mode="single-row",
+        key=f"leads.table.{hash(tuple(x.id for x in rows))}",
     )
+    picked = event["selection"]["rows"]
+    return rows[picked[0]] if picked and picked[0] < len(rows) else None
 
 
 def _create_form(client: ApiClient) -> None:
@@ -143,12 +156,8 @@ def _create_form(client: ApiClient) -> None:
     try:
         lead = client.create_lead(payload)
     except ApiError as error:
-        st.error(
-            "The lead was not created:  \n"
-            + "  \n".join(f"- {escape_markdown(line)}" for line in describe_create_error(error)),
-            icon=":material/error:",
-        )
+        show_error_lines("The lead was not created:", describe_create_error(error))
         return
     clear_lead_data()
-    st.session_state[_FLASH_KEY] = f"Lead created: {escape_markdown(lead.full_name)}"
+    set_flash(FLASH_KEY, f"Lead created: {lead.full_name}")
     st.rerun()

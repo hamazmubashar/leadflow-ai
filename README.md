@@ -9,8 +9,9 @@ A local-first service for collecting and validating sales leads.
 - **M4, lead scoring:** a 0–100 score with a hot/warm/cold tier, calculated on request from versioned TOML rules, with a per-rule explanation.
 - **M5, lead lifecycle:** each lead has a status (new, contacted, qualified, won, lost), changed through allowed transitions, with an append-only activity history.
 - **M6, response drafts:** generate an email draft for a lead from a fixed template, have a person approve or reject it, and record approved drafts in a **simulated** outbox.
+- **M7, dashboard:** a Streamlit operator dashboard (dark navy and orange) that uses only the REST API: KPIs and charts, leads with details and status changes, CSV import, scoring, activity, draft review and the simulated outbox.
 
-Everything runs on your machine, and it uses no paid services or external APIs. There's no dashboard, machine learning, or LLM.
+Everything runs on your machine, and it uses no paid services or external APIs. There's no machine learning or LLM.
 
 > **LeadFlow AI does not send anything.** No emails, SMS, or other messages are ever sent. M6's outbox is **simulated**: approving a draft only records that it *would* be sent. There's no sending code, mail server setting, or delivery worker, and nothing contacts an external service.
 
@@ -90,6 +91,45 @@ curl http://127.0.0.1:8000/health
 **`/health` doesn't check the database.** It only shows that the process is running. The app opens the database on the first lead request, so a healthy server can still answer lead requests with `503` (see [Database errors](#database-errors)).
 
 The OpenAPI docs at `/docs` and `/openapi.json` are public. They describe the API but contain no lead data.
+
+## Dashboard (M7)
+
+One command starts the API and the dashboard together; Ctrl+C stops both:
+
+```sh
+uv sync --group ui        # once: adds Streamlit to .venv
+bash scripts/dev.sh       # API on 127.0.0.1:8001, dashboard on http://127.0.0.1:8501
+```
+
+- **Ports:** `API_PORT=8002 bash scripts/dev.sh` uses another API port. The script refuses to start, and names the program, if a port is already taken.
+- **Configuration:** the dashboard reads the same `.env` as the API: `LEADFLOW_OPERATOR_TOKEN`, plus the optional `LEADFLOW_API_URL` (default `http://127.0.0.1:8000`; plain `http://` only for localhost). Restart the dashboard after editing `.env`.
+- **Local only:** `.streamlit/config.toml` binds the dashboard to `127.0.0.1` and turns off Streamlit's usage statistics.
+
+**Pages** (sidebar order):
+
+| Page | What it does | API used |
+|---|---|---|
+| Dashboard | Total/hot/warm/cold KPIs, leads by status, score distribution, recent activity and drafts, period filter | lead list, activity, score, drafts |
+| Leads | Search and filter; create a lead; select a row for contact details, score breakdown, status change (with `expected_status`), full history and drafts | lead create/list, status, activity, score, drafts |
+| CSV Import | Upload a file, see "imported N" or the rejected rows; template download | `POST /leads/import` |
+| Scoring | Every lead's score, tier and points per rule | score |
+| Activity | All events, filterable by lead and type | activity, drafts |
+| Drafts | Generate a draft, read it, approve or reject it (the reviewer confirms they read it first) | drafts create/get/approve/reject |
+| Outbox | Simulated items with their message and draft. **Nothing is sent.** | outbox, draft |
+| System Health | API reachability, version, token and database checks | `/health`, lead list |
+
+**How it works:**
+- **The API is the only source of truth.** The dashboard never opens `leadflow.db` and never recalculates a score, status rule, eligibility check or approval rule; it shows the API's values and its error messages.
+- **Data loading:** the API has no summary or filter endpoints, and lead responses don't include the status. So the dashboard reads every lead page, then each lead's activity, score and drafts: **three requests per lead**, cached for 60 seconds and cleared after every change (or with **Refresh**). That's instant for a demo-sized database. Loading stops at 500 leads and says so.
+- **Writes are never retried,** so a timeout can't create a duplicate. After a timed-out create or import, the dashboard says the outcome is unknown and asks you to check before trying again.
+- **Fresh reads before decisions:** a lead's status (used as `expected_status`) and a draft (before approve/reject) are read from the API, not the cache. A conflict shows what changed; nothing is overwritten.
+- **Privacy:** the token is a secret (never shown or logged). Error messages are the API's fixed texts. Every value from the API is escaped before it's displayed.
+
+**What it deliberately doesn't show:**
+- **Week-over-week changes:** scores and tiers aren't stored over time, so there's nothing honest to compare. Cards show "added in the last 7 days" and each tier's share instead.
+- **"Score calculated" events:** scores are calculated on request, not recorded.
+- **Partial CSV imports, and sent/failed outbox states:** imports are all or nothing (M3), and nothing is ever sent (M6).
+- **Editing or deleting leads, and user accounts:** the API has no such endpoints; there is one operator token.
 
 ## Use the API
 
@@ -500,6 +540,10 @@ uv run ruff check .
 uv run ruff format --check .
 uv run mypy
 uv run pytest                # includes coverage, fails under 90%
+
+# dashboard (needs the ui dependency group)
+uv run --group ui mypy dashboard
+uv run --group ui pytest dashboard/tests --no-cov -p no:cacheprovider
 ```
 
 - **Isolation:** the tests block network access and use temporary SQLite databases. They never touch `leadflow.db`.
@@ -521,7 +565,9 @@ src/leadflow_ai/
   main.py          application factory
 alembic.ini        Alembic configuration (the database URL comes from settings)
 tests/             unit, database, and API tests
+dashboard/         Streamlit dashboard (M7): API client, settings, pages in views/, tests/
+scripts/dev.sh     starts the API and the dashboard together
 docs/adr/          architectural decision records
 ```
 
-Design decisions: [ADR 0001](docs/adr/0001-m0-foundation.md) (foundation), [ADR 0002](docs/adr/0002-m1-lead-validation.md) (validation), [ADR 0003](docs/adr/0003-m2-database-and-api.md) (database and API), [ADR 0004](docs/adr/0004-m3-csv-import.md) (CSV import), [ADR 0005](docs/adr/0005-m4-lead-scoring.md) (lead scoring), [ADR 0006](docs/adr/0006-m5-lead-lifecycle.md) (lead lifecycle), [ADR 0007](docs/adr/0007-m6-drafts-and-simulated-outbox.md) (drafts and simulated outbox).
+Design decisions: [ADR 0001](docs/adr/0001-m0-foundation.md) (foundation), [ADR 0002](docs/adr/0002-m1-lead-validation.md) (validation), [ADR 0003](docs/adr/0003-m2-database-and-api.md) (database and API), [ADR 0004](docs/adr/0004-m3-csv-import.md) (CSV import), [ADR 0005](docs/adr/0005-m4-lead-scoring.md) (lead scoring), [ADR 0006](docs/adr/0006-m5-lead-lifecycle.md) (lead lifecycle), [ADR 0007](docs/adr/0007-m6-drafts-and-simulated-outbox.md) (drafts and simulated outbox), [ADR 0008](docs/adr/0008-m7-dashboard.md) (dashboard).

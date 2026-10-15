@@ -115,3 +115,38 @@ class DraftPage(_ApiModel):
     items: list[Draft]
     limit: int
     offset: int
+
+
+class StatusChange(_ApiModel):
+    lead_id: str
+    status: LeadStatus
+    event: LeadEvent
+
+
+class OutboxMessage(_ApiModel):
+    """A simulated outbox item: nothing was sent."""
+
+    id: str
+    draft_id: str
+    lead_id: str
+    status: Literal["simulated"]
+    recipient: str
+    subject: str
+    body: str
+    created_at: datetime
+
+
+class OutboxPage(_ApiModel):
+    items: list[OutboxMessage]
+    limit: int
+    offset: int
+
+
+class Approval(_ApiModel):
+    draft: Draft
+    outbox_message: OutboxMessage
+
+
+class ImportResult(_ApiModel):
+    imported: int
+    lead_ids: list[str]

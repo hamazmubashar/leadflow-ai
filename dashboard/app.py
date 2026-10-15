@@ -16,10 +16,19 @@ if _PROJECT_ROOT not in sys.path:
 
 import streamlit as st  # noqa: E402
 
-from dashboard import ui  # noqa: E402
+from dashboard import nav, ui  # noqa: E402
 from dashboard.config import ConfigError  # noqa: E402
 from dashboard.runtime import connection_status  # noqa: E402
-from dashboard.views import dashboard, health, leads  # noqa: E402
+from dashboard.views import (  # noqa: E402
+    activity,
+    dashboard,
+    drafts,
+    health,
+    import_csv,
+    leads,
+    outbox,
+    scoring,
+)
 
 st.set_page_config(
     page_title="LeadFlow AI",
@@ -29,19 +38,37 @@ st.set_page_config(
 )
 ui.apply_theme()
 
-dashboard_page = st.Page(
-    dashboard.render,
-    title="Dashboard",
-    icon=":material/space_dashboard:",
-    url_path="dashboard",
-    default=True,
-)
-leads_page = st.Page(leads.render, title="Leads", icon=":material/group:", url_path="leads")
-health_page = st.Page(
-    health.render, title="System Health", icon=":material/monitor_heart:", url_path="health"
-)
+# Sidebar order follows the M7 design: one page per workflow step.
+pages = {
+    "dashboard": st.Page(
+        dashboard.render,
+        title="Dashboard",
+        icon=":material/space_dashboard:",
+        url_path="dashboard",
+        default=True,
+    ),
+    "leads": st.Page(leads.render, title="Leads", icon=":material/group:", url_path="leads"),
+    "import": st.Page(
+        import_csv.render, title="CSV Import", icon=":material/upload_file:", url_path="import"
+    ),
+    "scoring": st.Page(
+        scoring.render, title="Scoring", icon=":material/leaderboard:", url_path="scoring"
+    ),
+    "activity": st.Page(
+        activity.render, title="Activity", icon=":material/history:", url_path="activity"
+    ),
+    "drafts": st.Page(
+        drafts.render, title="Drafts", icon=":material/edit_note:", url_path="drafts"
+    ),
+    "outbox": st.Page(outbox.render, title="Outbox", icon=":material/outbox:", url_path="outbox"),
+    "health": st.Page(
+        health.render, title="System Health", icon=":material/monitor_heart:", url_path="health"
+    ),
+}
+nav.PAGES.clear()
+nav.PAGES.update(pages)
 # Hidden built-in menu: the sidebar below draws the brand first, then the page links.
-navigation = st.navigation([dashboard_page, leads_page, health_page], position="hidden")
+navigation = st.navigation(list(pages.values()), position="hidden")
 
 with st.sidebar:
     ui.brand()
@@ -53,8 +80,7 @@ with st.sidebar:
         tone = ui.Tone.SUCCESS if status.connected else ui.Tone.DANGER
         st.markdown(ui.pill(status.label, tone), unsafe_allow_html=True)
     st.divider()
-    st.page_link(dashboard_page)
-    st.page_link(leads_page)
-    st.page_link(health_page)
+    for page in pages.values():
+        st.page_link(page)
 
 navigation.run()
