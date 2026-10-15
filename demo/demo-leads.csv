@@ -1,0 +1,26 @@
+full_name,email,phone,company,source,notes
+Ayesha Rahman,ayesha.rahman@example.com,+44 7700 900101,Brightline Logistics,referral,Referred by an existing customer
+Daniel Okafor,daniel.okafor@example.org,,Kestrel Analytics,referral,Wants a demo next week
+Sofia Marchetti,sofia.marchetti@example.net,+44 7700 900102,Verde Home Goods,event,Met at the retail expo
+Hiroshi Tanaka,hiroshi.tanaka@example.com,,,web_form,Asked about pricing
+Fatima Malik,fatima.malik@example.org,+44 7700 900103,Cedar & Stone Interiors,event,Interested in automation
+Liam Gallagher,liam.gallagher@example.net,,Northstar Outfitters,referral,
+Mei Lin,,+44 7700 900115,,web_form,Phone enquiry
+Omar Haddad,omar.haddad@example.org,+44 7700 900104,Silverleaf Clinics,import,From the partner list
+Priya Nair,priya.nair@example.net,,Lumen Learning Labs,import,
+Carlos Mendes,carlos.mendes@example.com,,,other,Inbound email enquiry
+Hannah Becker,hannah.becker@example.org,+44 7700 900105,,import,Booth visitor
+Kwame Mensah,,+44 7700 900106,Goldcoast Imports,event,Prefers phone calls
+Zara Sheikh,zara.sheikh@example.net,,Blue Orchid Boutique,other,
+Ethan Brooks,ethan.brooks@example.com,+44 7700 900107,,other,Requested a callback
+Amina Yusuf,,+44 7700 900116,,import,
+Lucas Moreau,,+44 7700 900108,,web_form,Left a voicemail
+Nadia Petrova,nadia.petrova@example.net,+44 7700 900109,Arctic Cold Chain,referral,Large account
+Bilal Qureshi,,+44 7700 900110,,other,Walk-in enquiry
+Grace Kim,grace.kim@example.com,,Maple Street Bakery,other,
+Tomás Rivera,,+44 7700 900111,Rivera Auto Parts,other,
+Elena Rossi,elena.rossi@example.org,,,referral,
+Yusuf Demir,,+44 7700 900112,,import,From the partner list
+Chloe Martin,chloe.martin@example.net,+44 7700 900113,Fieldstone Farms,web_form,Asked for case studies
+Arjun Mehta,arjun.mehta@example.com,,Copperleaf Software,event,
+Sara Lindqvist,,+44 7700 900114,,web_form,
