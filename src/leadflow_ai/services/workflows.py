@@ -26,6 +26,7 @@ Errors for one lead are recorded as that lead's ``failed`` result with a fixed c
 """
 
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, cast
@@ -41,6 +42,7 @@ from leadflow_ai.db.models import (
     WorkflowRunRecord,
 )
 from leadflow_ai.drafts import DraftStatus
+from leadflow_ai.leads import FieldError, LeadValidationError
 from leadflow_ai.lifecycle import LeadStatus
 from leadflow_ai.scoring.engine import ScoreResult, score_lead
 from leadflow_ai.scoring.rules import ScoringRules
@@ -72,6 +74,42 @@ _LIVE = RunMode.LIVE.value
 _ONE_RUNNING = "workflow_runs.workflow"
 _LIVE_ONCE = "workflow_run_items.workflow_version, workflow_run_items.lead_id"
 _RUN_NOT_RUNNING = "workflow_run_items require a running run"
+
+
+RUN_FIELDS = ("mode",)
+_MODE_CHOICES = ", ".join(mode.value for mode in RunMode)
+
+
+def parse_run_request(data: Mapping[str, object]) -> RunMode:
+    """Validate a start-run body. ``mode`` is required: a live run never starts by default.
+
+    Raises LeadValidationError (the shared field-error format); no values are echoed.
+    """
+    errors: list[FieldError] = []
+    if any(key not in RUN_FIELDS for key in data):
+        errors.append(
+            FieldError(
+                "unknown_fields",
+                "field.unknown",
+                "Contains unexpected fields; allowed fields are: " + ", ".join(RUN_FIELDS),
+            )
+        )
+    value = data.get("mode")
+    mode = None
+    if value is None or (isinstance(value, str) and not value.strip()):
+        errors.append(FieldError("mode", "field.required", "Required"))
+    elif not isinstance(value, str):
+        errors.append(FieldError("mode", "field.wrong_type", "Must be text"))
+    else:
+        try:
+            mode = RunMode(value.strip().lower())
+        except ValueError:
+            errors.append(
+                FieldError("mode", "mode.invalid_choice", f"Must be one of: {_MODE_CHOICES}")
+            )
+    if errors or mode is None:
+        raise LeadValidationError(errors)
+    return mode
 
 
 class RunInProgressError(Exception):

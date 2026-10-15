@@ -20,6 +20,7 @@ from leadflow_ai.api.limits import (
     MAX_REQUEST_BODY_BYTES,
     BodySizeLimitMiddleware,
 )
+from leadflow_ai.api.workflows import router as workflows_router
 from leadflow_ai.config import Settings, get_settings
 from leadflow_ai.db.session import Database
 from leadflow_ai.scoring.rules import load_rules
@@ -62,6 +63,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(leads_router)
     app.include_router(drafts_router)
     app.include_router(outbox_router)
+    app.include_router(workflows_router)
 
     @app.get("/health", response_model=HealthResponse, tags=["system"])
     def health() -> HealthResponse:

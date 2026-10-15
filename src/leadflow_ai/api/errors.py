@@ -20,6 +20,7 @@ from leadflow_ai.services.drafts import (
 from leadflow_ai.services.imports import ImportRejectedError
 from leadflow_ai.services.leads import DuplicateLeadError
 from leadflow_ai.services.lifecycle import InvalidTransitionError, StatusConflictError
+from leadflow_ai.services.workflows import RunInProgressError
 
 RETRY_AFTER_SECONDS = "1"
 
@@ -233,6 +234,17 @@ async def _draft_already_decided(request: Request, exc: Exception) -> JSONRespon
     )
 
 
+async def _workflow_run_in_progress(request: Request, exc: Exception) -> JSONResponse:
+    error = cast(RunInProgressError, exc)
+    detail: dict[str, object] = {
+        "code": "workflow.run_in_progress",
+        "message": "Another workflow run is in progress; wait for it to finish and try again",
+    }
+    if error.run_id is not None:
+        detail["run_id"] = error.run_id
+    return _error(409, detail)
+
+
 def register_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(RequestValidationError, _request_validation)
     app.add_exception_handler(InvalidRequestBodyError, _invalid_body)
@@ -247,4 +259,5 @@ def register_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(LeadNotEligibleError, _draft_lead_not_eligible)
     app.add_exception_handler(PendingDraftExistsError, _draft_pending_exists)
     app.add_exception_handler(DraftAlreadyDecidedError, _draft_already_decided)
+    app.add_exception_handler(RunInProgressError, _workflow_run_in_progress)
     app.add_exception_handler(OperationalError, _database_unavailable)
