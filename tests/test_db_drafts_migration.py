@@ -152,7 +152,10 @@ def test_keys_and_indexes(migrated_engine: Engine) -> None:
     with migrated_engine.connect() as connection:
         indexes: dict[str, str] = dict(
             connection.execute(
-                text("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL")
+                text(
+                    "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL"
+                    " AND tbl_name IN ('lead_drafts', 'outbox_messages')"
+                )
             ).all()
         )
     assert indexes == {
@@ -183,7 +186,10 @@ def test_partial_index_condition_matches_the_model(migrated_engine: Engine) -> N
 def test_triggers_exist(migrated_engine: Engine) -> None:
     with migrated_engine.connect() as connection:
         names = connection.execute(
-            text("SELECT name FROM sqlite_master WHERE type = 'trigger'")
+            text(
+                "SELECT name FROM sqlite_master WHERE type = 'trigger'"
+                " AND tbl_name IN ('lead_drafts', 'outbox_messages')"
+            )
         ).scalars()
         assert set(names) == TRIGGERS
 

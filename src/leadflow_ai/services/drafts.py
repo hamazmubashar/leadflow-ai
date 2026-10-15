@@ -147,6 +147,34 @@ def create_draft(session: Session, lead: LeadRecord, template: DraftTemplate) ->
     Raises LeadHasNoEmailError, LeadNotEligibleError or PendingDraftExistsError; on
     any failure nothing is written.
     """
+    draft = stage_pending_draft(session, lead, template)
+    try:
+        session.commit()
+    except IntegrityError as exc:
+        session.rollback()
+        if is_pending_conflict(exc):
+            raise PendingDraftExistsError from None
+        raise
+    return draft
+
+
+def is_pending_conflict(exc: IntegrityError) -> bool:
+    """True when ``exc`` is the one-pending-draft-per-lead index (the final safeguard)."""
+    return "lead_drafts.lead_id" in str(exc.orig)
+
+
+def stage_pending_draft(
+    session: Session, lead: LeadRecord, template: DraftTemplate
+) -> LeadDraftRecord:
+    """Add a pending draft to the session's transaction **without committing**.
+
+    Takes SQLite's write lock, checks eligibility and the one-pending-draft rule, and
+    adds the draft (its id is set now). The caller commits, so other rows (an M8
+    workflow result) can be committed atomically with it; on commit, an IntegrityError
+    for which ``is_pending_conflict`` is true means another pending draft won.
+    Raises LeadHasNoEmailError, LeadNotEligibleError or PendingDraftExistsError,
+    after rolling back the transaction.
+    """
     if lead.email is None:
         raise LeadHasNoEmailError
     # Name, company and email never change after a lead is created (only its status does).
@@ -167,6 +195,7 @@ def create_draft(session: Session, lead: LeadRecord, template: DraftTemplate) ->
         raise PendingDraftExistsError
 
     draft = LeadDraftRecord(
+        id=str(uuid.uuid4()),
         lead_id=lead.id,
         template=template.value,
         template_version=TEMPLATE_VERSION,
@@ -180,14 +209,6 @@ def create_draft(session: Session, lead: LeadRecord, template: DraftTemplate) ->
         decided_at=None,
     )
     session.add(draft)
-    try:
-        session.commit()
-    except IntegrityError as exc:
-        session.rollback()
-        # The partial unique index: the final safeguard against two pending drafts.
-        if "lead_drafts.lead_id" in str(exc.orig):
-            raise PendingDraftExistsError from None
-        raise
     return draft
 
 

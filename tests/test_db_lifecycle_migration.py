@@ -315,7 +315,7 @@ def test_offline_script_applied_by_hand(
     if fail:
         assert after == before
     else:
-        assert after["version"] == [("0003",)]
+        assert after["version"] == [("0004",)]
         assert "status" in after["leads_columns"]
         assert {"lead_drafts", "outbox_messages"} <= set(after["tables"])
         with sqlite3.connect(_path(database_url)) as check:

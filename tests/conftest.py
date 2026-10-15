@@ -60,12 +60,28 @@ def client(settings: Settings) -> TestClient:
     return TestClient(create_app(settings))
 
 
+def _repo_database_state() -> dict[str, tuple[int, int]]:
+    """Size and modification time of each database file present in the repository root."""
+    state: dict[str, tuple[int, int]] = {}
+    for name in REPO_DATABASE_FILES:
+        path = REPO_ROOT / name
+        if path.exists():
+            stat = path.stat()
+            state[name] = (stat.st_size, stat.st_mtime_ns)
+    return state
+
+
 @pytest.fixture(autouse=True)
 def _no_database_in_repo() -> Iterator[None]:
-    """Fail any test that creates the default database inside the repository."""
+    """Fail any test that creates or changes database files inside the repository.
+
+    A developer's own ``leadflow.db`` may already be there (it is git-ignored): it is
+    allowed, but no test may create, write or delete such a file.
+    """
+    before = _repo_database_state()
     yield
-    created = [name for name in REPO_DATABASE_FILES if (REPO_ROOT / name).exists()]
-    assert not created, f"test created database files in the repo: {created}"
+    after = _repo_database_state()
+    assert after == before, f"test created or changed database files in the repo: {after}"
 
 
 @pytest.fixture

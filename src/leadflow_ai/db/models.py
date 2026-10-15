@@ -27,12 +27,20 @@ from leadflow_ai.drafts import (
 )
 from leadflow_ai.leads import LeadSource
 from leadflow_ai.lifecycle import INITIAL_STATUS, LeadStatus
+from leadflow_ai.workflows import WORKFLOW_NAME, ItemOutcome, RunMode, RunStatus
 
 _SOURCE_VALUES = ", ".join(f"'{source.value}'" for source in LeadSource)
 _STATUS_VALUES = ", ".join(f"'{status.value}'" for status in LeadStatus)
 _TEMPLATE_VALUES = ", ".join(f"'{template.value}'" for template in DraftTemplate)
 _DRAFT_STATUS_VALUES = ", ".join(f"'{status.value}'" for status in DraftStatus)
 _PENDING = DraftStatus.PENDING_REVIEW.value
+_RUN_MODE_VALUES = ", ".join(f"'{mode.value}'" for mode in RunMode)
+_RUN_STATUS_VALUES = ", ".join(f"'{status.value}'" for status in RunStatus)
+_OUTCOME_VALUES = ", ".join(f"'{outcome.value}'" for outcome in ItemOutcome)
+_RUNNING = RunStatus.RUNNING.value
+_LIVE = RunMode.LIVE.value
+_PREVIEW = RunMode.PREVIEW.value
+_FAILED = ItemOutcome.FAILED.value
 
 EVENT_LEAD_CREATED = "lead_created"
 EVENT_STATUS_CHANGED = "status_changed"
@@ -208,3 +216,102 @@ class OutboxMessageRecord(Base):
 
     def __repr__(self) -> str:
         return f"OutboxMessageRecord(id={self.id!r})"
+
+
+class WorkflowRunRecord(Base):
+    """One execution of a fixed workflow (M8), in ``preview`` or ``live`` mode.
+
+    Its per-lead results are ``WorkflowRunItemRecord`` rows; counts are always derived
+    from them, never stored, so they can't drift. At most one run per workflow is
+    ``running`` (partial unique index). ``heartbeat_at`` is refreshed with every
+    recorded lead, so a run whose process stopped can be recognised and marked
+    ``interrupted``. Migration 0004 makes finished runs immutable and only lets a run
+    complete once every planned lead has a result.
+    """
+
+    __tablename__ = "workflow_runs"
+    __table_args__ = (
+        CheckConstraint(f"workflow IN ('{WORKFLOW_NAME}')", name="workflow_allowed"),
+        CheckConstraint(f"mode IN ({_RUN_MODE_VALUES})", name="mode_allowed"),
+        CheckConstraint(f"status IN ({_RUN_STATUS_VALUES})", name="status_allowed"),
+        CheckConstraint("planned_count >= 0", name="planned_count_non_negative"),
+        CheckConstraint(
+            f"(status = '{_RUNNING}' AND finished_at IS NULL AND error_code IS NULL)"
+            f" OR (status = '{RunStatus.COMPLETED.value}' AND finished_at IS NOT NULL"
+            " AND error_code IS NULL)"
+            f" OR (status IN ('{RunStatus.FAILED.value}', '{RunStatus.INTERRUPTED.value}')"
+            " AND finished_at IS NOT NULL AND error_code IS NOT NULL)",
+            name="shape",
+        ),
+        Index(
+            conv("uq_workflow_runs_one_running"),
+            "workflow",
+            unique=True,
+            sqlite_where=text(f"status = '{_RUNNING}'"),
+        ),
+        Index(conv("ix_workflow_runs_started_at"), "started_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_id)
+    workflow: Mapped[str] = mapped_column(String(40))
+    workflow_version: Mapped[str] = mapped_column(String(32))
+    rules_version: Mapped[str] = mapped_column(String(64))
+    mode: Mapped[str] = mapped_column(String(10))
+    status: Mapped[str] = mapped_column(String(20))
+    planned_count: Mapped[int] = mapped_column(Integer)
+    error_code: Mapped[str | None] = mapped_column(String(40))
+    started_at: Mapped[datetime] = mapped_column(UTCDateTime())
+    heartbeat_at: Mapped[datetime] = mapped_column(UTCDateTime())
+    finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+
+    def __repr__(self) -> str:
+        return f"WorkflowRunRecord(id={self.id!r}, mode={self.mode!r}, status={self.status!r})"
+
+
+class WorkflowRunItemRecord(Base):
+    """What a run did with one lead: its score and tier, and the outcome with a reason.
+
+    Holds no lead contact data. ``reason`` is a fixed code (``SkipReason`` or
+    ``FailureReason``), never an exception message. Rows are immutable (0004).
+    """
+
+    __tablename__ = "workflow_run_items"
+    __table_args__ = (
+        UniqueConstraint("run_id", "lead_id", name=conv("uq_workflow_run_items_run_id_lead_id")),
+        CheckConstraint(f"mode IN ({_RUN_MODE_VALUES})", name="mode_allowed"),
+        CheckConstraint(f"outcome IN ({_OUTCOME_VALUES})", name="outcome_allowed"),
+        CheckConstraint("tier IS NULL OR tier IN ('hot', 'warm', 'cold')", name="tier_allowed"),
+        CheckConstraint(
+            f"(outcome = '{ItemOutcome.DRAFT_CREATED.value}' AND mode = '{_LIVE}'"
+            " AND draft_id IS NOT NULL AND reason IS NULL)"
+            f" OR (outcome = '{ItemOutcome.WOULD_CREATE_DRAFT.value}' AND mode = '{_PREVIEW}'"
+            " AND draft_id IS NULL AND reason IS NULL)"
+            f" OR (outcome IN ('{ItemOutcome.SKIPPED.value}', '{_FAILED}')"
+            " AND draft_id IS NULL AND reason IS NOT NULL)",
+            name="shape",
+        ),
+        Index(
+            conv("uq_workflow_run_items_live_once"),
+            "workflow_version",
+            "lead_id",
+            unique=True,
+            sqlite_where=text(f"mode = '{_LIVE}' AND outcome <> '{_FAILED}'"),
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_id)
+    run_id: Mapped[str] = mapped_column(String(36), ForeignKey("workflow_runs.id"))
+    lead_id: Mapped[str] = mapped_column(String(36), ForeignKey("leads.id"))
+    workflow_version: Mapped[str] = mapped_column(String(32))
+    mode: Mapped[str] = mapped_column(String(10))
+    outcome: Mapped[str] = mapped_column(String(30))
+    reason: Mapped[str | None] = mapped_column(String(40))
+    score: Mapped[int | None] = mapped_column(Integer)
+    tier: Mapped[str | None] = mapped_column(String(10))
+    draft_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("lead_drafts.id"), unique=True
+    )
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=_utc_now)
+
+    def __repr__(self) -> str:
+        return f"WorkflowRunItemRecord(id={self.id!r}, outcome={self.outcome!r})"

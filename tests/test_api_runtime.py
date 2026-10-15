@@ -227,7 +227,7 @@ def test_health_does_not_create_or_connect_to_the_database(tmp_path: Path) -> No
     )
     app = create_app(settings)
     with TestClient(app) as client:  # runs startup and shutdown
-        assert client.get("/health").json() == {"status": "ok", "version": "0.6.0"}
+        assert client.get("/health").json() == {"status": "ok", "version": "0.7.0"}
         assert app.state.database.engine is None
     assert not db_file.exists()
 
