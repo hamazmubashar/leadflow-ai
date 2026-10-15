@@ -44,6 +44,7 @@ def _isolate_environment(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Keep host env vars and the settings cache from leaking into tests."""
     monkeypatch.delenv("LEADFLOW_OPERATOR_TOKEN", raising=False)
     monkeypatch.delenv("LEADFLOW_DATABASE_URL", raising=False)
+    monkeypatch.delenv("LEADFLOW_SCORING_RULES_PATH", raising=False)
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()

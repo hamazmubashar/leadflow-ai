@@ -10,10 +10,17 @@ from sqlalchemy.orm import Session
 from leadflow_ai.api.errors import InvalidRequestBodyError, UnsupportedMediaTypeError
 from leadflow_ai.auth import OperatorAuth
 from leadflow_ai.db.session import Database, session_scope
+from leadflow_ai.scoring.rules import ScoringRules
 
 JSON_MEDIA_TYPE = "application/json"
 CSV_MEDIA_TYPE = "text/csv"
 CSV_EXPECTED = "text/csv (UTF-8)"
+
+
+def get_scoring_rules(request: Request) -> ScoringRules:
+    """The rules validated at startup (see ``create_app``)."""
+    rules: ScoringRules = request.app.state.scoring_rules
+    return rules
 
 
 def get_session(request: Request) -> Generator[Session]:
@@ -83,3 +90,4 @@ def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 SessionDep = Annotated[Session, Depends(get_session)]
 JsonObjectBody = Annotated[dict[str, object], Depends(json_object_body)]
 CsvBody = Annotated[bytes, Depends(csv_body)]
+ScoringRulesDep = Annotated[ScoringRules, Depends(get_scoring_rules)]

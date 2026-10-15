@@ -20,6 +20,7 @@ from leadflow_ai.api.limits import (
 )
 from leadflow_ai.config import Settings, get_settings
 from leadflow_ai.db.session import Database
+from leadflow_ai.scoring.rules import load_rules
 
 
 class HealthResponse(BaseModel):
@@ -30,9 +31,11 @@ class HealthResponse(BaseModel):
 def create_app(settings: Settings | None = None) -> FastAPI:
     """Build the application, failing fast if configuration is invalid.
 
-    The database is not opened here; the first request that needs it does.
+    Scoring rules are loaded and validated here (ScoringRulesError stops
+    startup). The database is not opened here; the first request that needs it does.
     """
     resolved = settings if settings is not None else get_settings()
+    scoring_rules = load_rules(resolved.scoring_rules_path)
     database = Database(resolved)
 
     @asynccontextmanager
@@ -46,6 +49,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         title="LeadFlow AI", version=__version__, lifespan=lifespan, redirect_slashes=False
     )
     app.state.database = database
+    app.state.scoring_rules = scoring_rules
     app.dependency_overrides[get_settings] = lambda: resolved
     app.add_middleware(
         BodySizeLimitMiddleware,

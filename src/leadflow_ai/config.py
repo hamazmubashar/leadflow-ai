@@ -1,6 +1,7 @@
 """Application settings loaded from environment variables or a local .env file."""
 
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -54,6 +55,21 @@ class Settings(DatabaseSettings):
     operator_token: SecretStr = Field(
         description="Bearer token required for operator endpoints.",
     )
+    # None means the packaged default rules. An explicit path that is missing or
+    # invalid stops startup; there is no fallback to the defaults.
+    scoring_rules_path: Path | None = Field(
+        default=None,
+        description="Optional TOML scoring rules file overriding the packaged defaults.",
+    )
+
+    @field_validator("scoring_rules_path", mode="before")
+    @classmethod
+    def _empty_rules_path_means_default(cls, value: object) -> object:
+        # An empty or whitespace-only value (e.g. a blank line in .env) means "no
+        # override". Any other value is kept exactly and must be a valid rules file.
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
     @field_validator("operator_token")
     @classmethod

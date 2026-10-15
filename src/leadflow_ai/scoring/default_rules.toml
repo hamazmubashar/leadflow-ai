@@ -1,0 +1,48 @@
+# LeadFlow AI default scoring rules.
+#
+# Scores are configurable prioritization heuristics, NOT validated predictions
+# of conversion. Change the points to suit your own pipeline and bump
+# rules_version whenever you do: every score response reports it.
+#
+# The total of the highest source score and all signal points must not exceed 100.
+
+schema_version = 1               # file format; this version of LeadFlow AI accepts exactly 1
+rules_version = "2026-10-15.1"   # identifies this ruleset (letters, digits, ".", "_", "-")
+
+[tiers]                          # minimum score for each tier
+hot = 70
+warm = 40
+cold = 0
+
+[points.source]                  # must list every lead source exactly once
+referral = 30
+event = 20
+web_form = 15
+import = 5
+other = 0
+
+[points.signals]
+has_email = 15
+has_phone = 15
+has_company = 15
+# The email address is at a domain NOT in the list below. This does not verify
+# that the lead is a business or works where the domain suggests.
+non_free_email_domain = 25
+
+[free_email_domains]
+# Common free or personal email providers. The list is short and incomplete:
+# add the providers used by your leads (for example regional ones).
+domains = [
+    "aol.com",
+    "gmail.com",
+    "gmx.com",
+    "hotmail.com",
+    "icloud.com",
+    "live.com",
+    "mail.com",
+    "outlook.com",
+    "proton.me",
+    "protonmail.com",
+    "yahoo.com",
+    "yandex.com",
+]

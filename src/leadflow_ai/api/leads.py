@@ -1,15 +1,16 @@
 """Lead endpoints. Every route requires the operator bearer token."""
 
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, ConfigDict
 
-from leadflow_ai.api.deps import CsvBody, JsonObjectBody, SessionDep
+from leadflow_ai.api.deps import CsvBody, JsonObjectBody, ScoringRulesDep, SessionDep
 from leadflow_ai.auth import require_operator
 from leadflow_ai.imports.csv_reader import read_leads_csv
 from leadflow_ai.leads import LeadSource
+from leadflow_ai.scoring.engine import score_lead
 from leadflow_ai.services.imports import import_leads
 from leadflow_ai.services.leads import (
     DEFAULT_PAGE_LIMIT,
@@ -45,6 +46,25 @@ class LeadPage(BaseModel):
     items: list[LeadOut]
     limit: int
     offset: int
+
+
+class ScoreFactorOut(BaseModel):
+    """One rule's contribution. ``rule`` is a fixed rule name, never a lead value."""
+
+    rule: str
+    matched: bool
+    points: int
+
+
+class ScoreOut(BaseModel):
+    """A prioritization heuristic from configurable rules, not a conversion prediction."""
+
+    lead_id: str
+    score: int
+    max_score: int
+    tier: Literal["hot", "warm", "cold"]
+    rules_version: str
+    factors: list[ScoreFactorOut]
 
 
 class ImportOut(BaseModel):
@@ -125,3 +145,27 @@ def retrieve(lead_id: str, session: SessionDep) -> LeadOut:
 def import_csv(body: CsvBody, session: SessionDep) -> ImportOut:
     result = import_leads(session, read_leads_csv(body))
     return ImportOut(imported=result.imported, lead_ids=list(result.lead_ids))
+
+
+@router.get(
+    "/{lead_id}/score",
+    response_model=ScoreOut,
+    summary="Score a lead with the configured rules (calculated on request)",
+)
+def score(lead_id: str, session: SessionDep, rules: ScoringRulesDep) -> ScoreOut:
+    record = get_lead(session, lead_id)
+    if record is None:
+        raise HTTPException(
+            status_code=404, detail={"code": "lead.not_found", "message": "Lead not found"}
+        )
+    result = score_lead(record, rules)
+    return ScoreOut(
+        lead_id=record.id,
+        score=result.score,
+        max_score=result.max_score,
+        tier=result.tier,
+        rules_version=result.rules_version,
+        factors=[
+            ScoreFactorOut(rule=f.rule, matched=f.matched, points=f.points) for f in result.factors
+        ],
+    )

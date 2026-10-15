@@ -6,10 +6,11 @@ A local-first service for collecting and validating sales leads.
 - **M1, lead validation:** pure-Python validation and normalization of lead input.
 - **M2, storage and API:** a local SQLite database (SQLAlchemy and Alembic) and an authenticated REST API to create and read leads.
 - **M3, CSV import:** upload a CSV file of leads; every row is validated and the whole file is imported, or nothing is.
+- **M4, lead scoring:** a 0–100 score with a hot/warm/cold tier, calculated on request from versioned TOML rules, with a per-rule explanation.
 
-Everything runs on your machine, and it uses no paid services or external APIs. There's no dashboard, scoring, or LLM yet.
+Everything runs on your machine, and it uses no paid services or external APIs. There's no dashboard, machine learning, or LLM.
 
-> **LeadFlow AI does not send anything.** No emails, SMS, or other messages are sent, and there's no sending feature in M0–M3, real or simulated. It only stores and returns the leads you submit.
+> **LeadFlow AI does not send anything.** No emails, SMS, or other messages are sent, and there's no sending feature in M0–M4, real or simulated. It only stores and returns the leads you submit.
 
 ## Requirements
 
@@ -46,6 +47,7 @@ Settings come from environment variables or from `.env` in the directory you run
 |---|---|---|
 | `LEADFLOW_OPERATOR_TOKEN` | yes | Bearer token for the lead API, at least 32 characters |
 | `LEADFLOW_DATABASE_URL` | no | Local SQLite file URL (default `sqlite:///./leadflow.db`); other databases are rejected |
+| `LEADFLOW_SCORING_RULES_PATH` | no | Path to your own scoring rules TOML file; the built-in rules are used when it's unset or empty (see [Lead scoring](#lead-scoring-get-apiv1leadsidscore)) |
 
 - **Relative path:** the default path `./leadflow.db` is relative to the directory you run commands from. Run `alembic` and `uvicorn` from the same place, normally the project root.
 - **Accepted URLs:** only local SQLite file URLs (`sqlite:///relative.db` or `sqlite:////absolute/path.db`). Other databases, in-memory databases, hosts, credentials, and query parameters are rejected at startup.
@@ -76,7 +78,7 @@ Add `--reload` while developing. The server listens on `http://127.0.0.1:8000`, 
 
 ```sh
 curl http://127.0.0.1:8000/health
-# {"status":"ok","version":"0.3.0"}
+# {"status":"ok","version":"0.4.0"}
 ```
 
 **`/health` doesn't check the database.** It only shows that the process is running. The app opens the database on the first lead request, so a healthy server can still answer lead requests with `503` (see [Database errors](#database-errors)).
@@ -238,6 +240,51 @@ Fetch each imported lead with `GET /api/v1/leads/{id}`.
 | `header.duplicate_columns` | the same column more than once |
 | `header.missing_required` | no `full_name` column, or neither `email` nor `phone` |
 
+### Lead scoring: `GET /api/v1/leads/{id}/score`
+
+```sh
+curl http://127.0.0.1:8000/api/v1/leads/<id>/score \
+  -H "Authorization: Bearer $LEADFLOW_OPERATOR_TOKEN"
+```
+
+```json
+{"lead_id": "2f1c...", "score": 45, "max_score": 100, "tier": "warm", "rules_version": "2026-10-15.1",
+ "factors": [{"rule": "source.web_form", "matched": true, "points": 15},
+             {"rule": "has_email", "matched": true, "points": 15},
+             {"rule": "has_phone", "matched": true, "points": 15},
+             {"rule": "has_company", "matched": false, "points": 0},
+             {"rule": "non_free_email_domain", "matched": false, "points": 0}]}
+```
+
+**What it is:**
+- **A heuristic, not a prediction.** The score is a prioritization aid based on configurable rules. It has **not** been validated against real conversions, so treat it as a sorting hint, not a forecast.
+- **Explained.** `factors` always lists the same five rules in the same order (the lead's source, then four signals), showing which matched and the points each added. The score is their sum.
+- **Calculated on request.** The score is never stored, so it always reflects the lead's current data and the current rules. `rules_version` tells you which ruleset produced it.
+- **Deterministic.** The same lead and rules always give the same score. Nothing depends on the time.
+- **Privacy:** the response contains rule names and points only, never the lead's email, domain, phone, or other values.
+- **No scores elsewhere:** other responses (create, get, list, import) don't include a score.
+
+**Default rules** (0–100):
+
+| Rule | Points | Matched when |
+|---|---|---|
+| `source.*` | referral 30, event 20, web_form 15, import 5, other 0 | always; the lead's source |
+| `has_email` | 15 | the lead has an email address |
+| `has_phone` | 15 | the lead has a phone number |
+| `has_company` | 15 | the lead has a company name |
+| `non_free_email_domain` | 25 | the email's domain is **not** on the free-email list (`gmail.com`, `outlook.com`, ...) |
+
+**Tiers:** `hot` at 70 or above, `warm` at 40 or above, otherwise `cold`.
+
+**Fields that are never scored:** names, phone country codes, notes, and creation time. They could introduce bias (names, countries), are unpredictable free text (notes), or would make the score change over time (creation time).
+
+**Limits of `non_free_email_domain`:** it only checks that the domain isn't on a short list of free providers. It does **not** verify that the lead works for a business, or for the company the domain suggests. A personal custom domain or a regional free provider missing from the list also matches, so add the providers your leads use.
+
+**Custom rules:** copy `src/leadflow_ai/scoring/default_rules.toml`, edit it, and set `LEADFLOW_SCORING_RULES_PATH` to the copy. Change `rules_version` whenever you change the rules.
+- **Validation:** every key, type and range is checked when the server starts. Whole numbers only (no `true`/`false` or decimals), every lead source listed exactly once, `hot > warm > cold = 0`, valid lowercase domains, at most 64 KiB, and the highest source score plus all signal points no more than 100.
+- **Invalid rules stop the server from starting**, with a list of every problem by key path. The server **never** silently falls back to the built-in rules.
+- **Changes take effect after a restart.**
+
 ### Errors
 
 Most errors have the form `{"detail": {"code": "...", ...}}`. Depending on the error, `detail` also has a `message`, a list of `errors`, `row_errors`, or `conflicts`. Errors never include the values you sent.
@@ -344,6 +391,7 @@ src/leadflow_ai/
   db/              SQLAlchemy models, engine/session, Alembic migrations (M2)
   services/        lead create/get/list, duplicate handling (M2), CSV batch import (M3)
   imports/         CSV file reading and header checks (M3)
+  scoring/         scoring rules (default_rules.toml), validation and the pure scoring engine (M4)
   leads/           pure-Python validation and normalization (M1)
   main.py          application factory
 alembic.ini        Alembic configuration (the database URL comes from settings)
@@ -351,4 +399,4 @@ tests/             unit, database, and API tests
 docs/adr/          architectural decision records
 ```
 
-Design decisions: [ADR 0001](docs/adr/0001-m0-foundation.md) (foundation), [ADR 0002](docs/adr/0002-m1-lead-validation.md) (validation), [ADR 0003](docs/adr/0003-m2-database-and-api.md) (database and API), [ADR 0004](docs/adr/0004-m3-csv-import.md) (CSV import).
+Design decisions: [ADR 0001](docs/adr/0001-m0-foundation.md) (foundation), [ADR 0002](docs/adr/0002-m1-lead-validation.md) (validation), [ADR 0003](docs/adr/0003-m2-database-and-api.md) (database and API), [ADR 0004](docs/adr/0004-m3-csv-import.md) (CSV import), [ADR 0005](docs/adr/0005-m4-lead-scoring.md) (lead scoring).
