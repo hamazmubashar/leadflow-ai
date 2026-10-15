@@ -1,7 +1,7 @@
 [project]
 name = "leadflow-ai"
-version = "0.2.0"
-description = "LeadFlow AI: lead validation, local SQLite storage and an operator REST API."
+version = "0.3.0"
+description = "LeadFlow AI: lead validation, local SQLite storage, CSV import and an operator REST API."
 readme = "README.md"
 requires-python = "==3.12.*"
 dependencies = [

@@ -11,8 +11,13 @@ from pydantic import BaseModel
 
 from leadflow_ai import __version__
 from leadflow_ai.api.errors import register_error_handlers
+from leadflow_ai.api.leads import IMPORT_PATH
 from leadflow_ai.api.leads import router as leads_router
-from leadflow_ai.api.limits import MAX_REQUEST_BODY_BYTES, BodySizeLimitMiddleware
+from leadflow_ai.api.limits import (
+    MAX_IMPORT_BODY_BYTES,
+    MAX_REQUEST_BODY_BYTES,
+    BodySizeLimitMiddleware,
+)
 from leadflow_ai.config import Settings, get_settings
 from leadflow_ai.db.session import Database
 
@@ -42,7 +47,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.database = database
     app.dependency_overrides[get_settings] = lambda: resolved
-    app.add_middleware(BodySizeLimitMiddleware, max_bytes=MAX_REQUEST_BODY_BYTES)
+    app.add_middleware(
+        BodySizeLimitMiddleware,
+        max_bytes=MAX_REQUEST_BODY_BYTES,
+        path_limits={IMPORT_PATH: MAX_IMPORT_BODY_BYTES},
+    )
     register_error_handlers(app)
     app.include_router(leads_router)
 

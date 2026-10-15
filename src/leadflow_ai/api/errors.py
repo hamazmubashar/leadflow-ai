@@ -8,7 +8,9 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import OperationalError
 
+from leadflow_ai.imports.csv_reader import CsvFileError
 from leadflow_ai.leads import LeadValidationError
+from leadflow_ai.services.imports import ImportRejectedError
 from leadflow_ai.services.leads import DuplicateLeadError
 
 RETRY_AFTER_SECONDS = "1"
@@ -19,7 +21,11 @@ class InvalidRequestBodyError(Exception):
 
 
 class UnsupportedMediaTypeError(Exception):
-    """The request body is not declared as ``application/json``."""
+    """The request body is not declared with the media type the route expects."""
+
+    def __init__(self, expected: str = "application/json") -> None:
+        super().__init__(expected)
+        self.expected = expected
 
 
 def _error(status_code: int, detail: dict[str, object], **headers: str) -> JSONResponse:
@@ -48,11 +54,45 @@ async def _invalid_body(request: Request, exc: Exception) -> JSONResponse:
 
 
 async def _unsupported_media_type(request: Request, exc: Exception) -> JSONResponse:
+    expected = cast(UnsupportedMediaTypeError, exc).expected
     return _error(
         415,
+        {"code": "request.unsupported_media_type", "message": f"Content-Type must be {expected}"},
+    )
+
+
+async def _import_invalid_file(request: Request, exc: Exception) -> JSONResponse:
+    # Columns are reported by number only: header text may be a forgotten data row.
+    errors: list[dict[str, object]] = []
+    for error in cast(CsvFileError, exc).errors:
+        item: dict[str, object] = {"code": error.code, "message": error.message}
+        if error.columns:
+            item["columns"] = list(error.columns)
+        errors.append(item)
+    return _error(422, {"code": "import.invalid_file", "errors": errors})
+
+
+async def _import_rejected(request: Request, exc: Exception) -> JSONResponse:
+    rejected = cast(ImportRejectedError, exc)
+    row_errors: list[dict[str, object]] = []
+    for error in rejected.errors:
+        item: dict[str, object] = {"row": error.row}
+        if error.field is not None:
+            item["field"] = error.field
+        item["code"] = error.code
+        item["message"] = error.message
+        if error.lead_id is not None:
+            item["lead_id"] = error.lead_id
+        if error.duplicate_of_row is not None:
+            item["duplicate_of_row"] = error.duplicate_of_row
+        row_errors.append(item)
+    return _error(
+        422,
         {
-            "code": "request.unsupported_media_type",
-            "message": "Content-Type must be application/json",
+            "code": "import.rejected",
+            "message": "No leads were imported",
+            "row_errors": row_errors,
+            "truncated": rejected.truncated,
         },
     )
 
@@ -119,4 +159,6 @@ def register_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(UnsupportedMediaTypeError, _unsupported_media_type)
     app.add_exception_handler(LeadValidationError, _lead_invalid)
     app.add_exception_handler(DuplicateLeadError, _lead_duplicate)
+    app.add_exception_handler(CsvFileError, _import_invalid_file)
+    app.add_exception_handler(ImportRejectedError, _import_rejected)
     app.add_exception_handler(OperationalError, _database_unavailable)

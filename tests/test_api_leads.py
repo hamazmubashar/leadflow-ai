@@ -38,6 +38,7 @@ ROUTES = [
     ("POST", LEADS),
     ("GET", LEADS),
     ("GET", f"{LEADS}/{uuid.uuid4()}"),
+    ("POST", f"{LEADS}/import"),
 ]
 BAD_HEADERS = [
     {},
@@ -87,6 +88,7 @@ def test_all_api_routes_declare_operator_auth(api: TestClient) -> None:
             ("POST", LEADS),
             ("GET", LEADS),
             ("GET", f"{LEADS}/{{lead_id}}"),
+            ("POST", f"{LEADS}/import"),
         }
     )
     for route in leads_router.routes:

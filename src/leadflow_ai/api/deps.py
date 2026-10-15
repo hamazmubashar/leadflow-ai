@@ -1,4 +1,4 @@
-"""Request dependencies: database session and authenticated JSON body."""
+"""Request dependencies: database session and authenticated JSON or CSV bodies."""
 
 import json
 from collections.abc import Generator
@@ -12,6 +12,8 @@ from leadflow_ai.auth import OperatorAuth
 from leadflow_ai.db.session import Database, session_scope
 
 JSON_MEDIA_TYPE = "application/json"
+CSV_MEDIA_TYPE = "text/csv"
+CSV_EXPECTED = "text/csv (UTF-8)"
 
 
 def get_session(request: Request) -> Generator[Session]:
@@ -29,7 +31,7 @@ async def json_object_body(request: Request, _: OperatorAuth) -> dict[str, objec
     errors privacy-safe.
     """
     if _media_type(request.headers.get("content-type")) != JSON_MEDIA_TYPE:
-        raise UnsupportedMediaTypeError
+        raise UnsupportedMediaTypeError(JSON_MEDIA_TYPE)
     raw = await request.body()
     try:
         data: Any = json.loads(raw, object_pairs_hook=_reject_duplicate_keys)
@@ -38,6 +40,28 @@ async def json_object_body(request: Request, _: OperatorAuth) -> dict[str, objec
     if not isinstance(data, dict):
         raise InvalidRequestBodyError
     return data
+
+
+async def csv_body(request: Request, _: OperatorAuth) -> bytes:
+    """Return the raw CSV bytes, only after authentication succeeds.
+
+    Order: 413 (middleware) -> 401 -> 415 here -> 422 when the file is read.
+    The media type must be ``text/csv``; a ``charset`` parameter, if given, must
+    be UTF-8. Nothing is written to disk.
+    """
+    content_type = request.headers.get("content-type")
+    if _media_type(content_type) != CSV_MEDIA_TYPE or _charset(content_type) not in (None, "utf-8"):
+        raise UnsupportedMediaTypeError(CSV_EXPECTED)
+    return await request.body()
+
+
+def _charset(content_type: str | None) -> str | None:
+    """``"text/csv; Charset=\"UTF-8\""`` -> ``"utf-8"``; ``None`` if absent."""
+    for parameter in (content_type or "").split(";")[1:]:
+        name, _, value = parameter.partition("=")
+        if name.strip().lower() == "charset":
+            return value.strip().strip('"').lower()
+    return None
 
 
 def _media_type(content_type: str | None) -> str | None:
@@ -58,3 +82,4 @@ def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 SessionDep = Annotated[Session, Depends(get_session)]
 JsonObjectBody = Annotated[dict[str, object], Depends(json_object_body)]
+CsvBody = Annotated[bytes, Depends(csv_body)]

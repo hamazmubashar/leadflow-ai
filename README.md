@@ -5,10 +5,11 @@ A local-first service for collecting and validating sales leads.
 - **M0, foundation:** a FastAPI service with a health endpoint, typed configuration, reusable operator authentication, and quality tooling.
 - **M1, lead validation:** pure-Python validation and normalization of lead input.
 - **M2, storage and API:** a local SQLite database (SQLAlchemy and Alembic) and an authenticated REST API to create and read leads.
+- **M3, CSV import:** upload a CSV file of leads; every row is validated and the whole file is imported, or nothing is.
 
 Everything runs on your machine, and it uses no paid services or external APIs. There's no dashboard, scoring, or LLM yet.
 
-> **LeadFlow AI does not send anything.** No emails, SMS, or other messages are sent, and there's no sending feature in M0–M2, real or simulated. It only stores and returns the leads you submit.
+> **LeadFlow AI does not send anything.** No emails, SMS, or other messages are sent, and there's no sending feature in M0–M3, real or simulated. It only stores and returns the leads you submit.
 
 ## Requirements
 
@@ -75,7 +76,7 @@ Add `--reload` while developing. The server listens on `http://127.0.0.1:8000`, 
 
 ```sh
 curl http://127.0.0.1:8000/health
-# {"status":"ok","version":"0.2.0"}
+# {"status":"ok","version":"0.3.0"}
 ```
 
 **`/health` doesn't check the database.** It only shows that the process is running. The app opens the database on the first lead request, so a healthy server can still answer lead requests with `503` (see [Database errors](#database-errors)).
@@ -161,9 +162,85 @@ A duplicate returns `409`. The response names the field and the existing lead's 
 
 The existing lead is never changed or merged, and nothing is written. This holds even when two requests arrive at the same moment, because the database's unique constraints decide.
 
+### Import leads from CSV: `POST /api/v1/leads/import`
+
+Send a CSV file as the raw request body with `Content-Type: text/csv`. The bearer token is required, as for every lead request.
+
+```sh
+curl -X POST http://127.0.0.1:8000/api/v1/leads/import \
+  -H "Authorization: Bearer $LEADFLOW_OPERATOR_TOKEN" \
+  -H "Content-Type: text/csv" \
+  --data-binary @leads.csv
+```
+
+Use `--data-binary`, which sends the file exactly as it is. `-d` strips line breaks, and `-F` (a multipart form upload) is rejected with `415`.
+
+**File format:**
+
+```
+full_name,email,phone,company,source,notes
+Ayesha Khan,ayesha@example.com,0300-1234567,Acme Traders,referral,Met at expo
+Bilal,,+44 20 7946 0958,,,
+```
+
+- **Header row:** required. The columns are the same fields as a single lead: `full_name` plus `email` and/or `phone` are required, and the rest are optional.
+  - Column names ignore case and surrounding spaces, and can be in any order.
+  - An unknown or repeated column rejects the file.
+- **Cells:** an empty cell means "not provided". Every row goes through the same validation as a single lead.
+- **Blank lines** are skipped. Row numbers in errors are spreadsheet row numbers: the first line of the file is row 1, and blank lines (including any before the header) are counted.
+- **Encoding:** must be UTF-8. In Excel, use **File > Save As > "CSV UTF-8 (Comma delimited)"**. Plain "CSV" in Excel uses Windows-1252: a file containing only ASCII characters is also valid UTF-8 and is accepted, but accented or non-Latin letters (for example `é` or Urdu text) make it fail with `file.encoding`. Always choose "CSV UTF-8".
+- **Limits:**
+  - at most **1 MiB** (1048576 bytes) per file (other API requests are limited to 16 KiB)
+  - at most **1,000 lead rows** per file; split larger lists into several files
+
+**All or nothing:**
+- **Success:** if every row is valid and new, all rows are imported in one step and the response lists their ids in file order.
+- **Any failure:** if any row is invalid or a duplicate, **nothing is imported**. Fix the file and upload it again.
+
+```
+HTTP/1.1 201 Created
+
+{"imported": 2, "lead_ids": ["2f1c...", "8a7d..."]}
+```
+
+Fetch each imported lead with `GET /api/v1/leads/{id}`.
+
+**Duplicates are rejected, never merged.** A row is rejected if its email or phone matches an earlier row in the same file (`row.duplicate_in_file`, with `duplicate_of_row`) or an existing lead (`lead.duplicate`, with that lead's `lead_id`). Re-uploading a file that was already imported is therefore rejected as a whole.
+
+**Rejected rows** return `422 import.rejected`. Row errors are the single-lead validation codes, the two duplicate codes above, and `row.column_count` (a row with more or fewer cells than the header). At most 100 row errors are listed, and `truncated` is `true` when there were more:
+
+```json
+{"detail": {"code": "import.rejected", "message": "No leads were imported",
+            "row_errors": [
+              {"row": 3, "field": "email", "code": "email.invalid_format", "message": "Not a valid email address"},
+              {"row": 4, "field": "email", "code": "row.duplicate_in_file", "message": "Same email or phone as an earlier row in this file", "duplicate_of_row": 2},
+              {"row": 5, "field": "phone", "code": "lead.duplicate", "message": "A lead with this email or phone already exists", "lead_id": "2f1c..."},
+              {"row": 6, "code": "row.column_count", "message": "Expected 3 values, found 4"}],
+            "truncated": false}}
+```
+
+**A file that can't be read at all** returns `422 import.invalid_file`. Each entry in `errors` has a `code` and a fixed `message` that never contains your data, plus `columns` for header column problems. Problem columns are identified **by column number, not name**, because a missing header row would otherwise echo your data:
+
+```json
+{"detail": {"code": "import.invalid_file",
+            "errors": [{"code": "header.unknown_columns",
+                        "message": "Unknown column names; allowed columns are: full_name, email, phone, company, source, notes",
+                        "columns": [2, 4]}]}}
+```
+
+| `errors[].code` | Meaning |
+|---|---|
+| `file.empty` | no data, or a header with no lead rows |
+| `file.encoding` | not UTF-8 (save as "CSV UTF-8") |
+| `file.malformed` | broken quoting, NUL characters, or a single cell over 131,072 characters |
+| `file.too_many_rows` | more than 1,000 lead rows |
+| `header.unknown_columns` | column names that aren't lead fields (blank header cells included) |
+| `header.duplicate_columns` | the same column more than once |
+| `header.missing_required` | no `full_name` column, or neither `email` nor `phone` |
+
 ### Errors
 
-Most errors have the form `{"detail": {"code": "...", ...}}`. Depending on the error, `detail` also has a `message`, a list of `errors`, or a list of `conflicts`. Errors never include the values you sent.
+Most errors have the form `{"detail": {"code": "...", ...}}`. Depending on the error, `detail` also has a `message`, a list of `errors`, `row_errors`, or `conflicts`. Errors never include the values you sent.
 
 | Status | `detail.code` | When |
 |---|---|---|
@@ -171,11 +248,13 @@ Most errors have the form `{"detail": {"code": "...", ...}}`. Depending on the e
 | `404` | `lead.not_found` | no lead with that id (also for malformed ids) |
 | `404` | none (`"Not Found"`) | unknown path, including a trailing slash such as `/api/v1/leads/` |
 | `409` | `lead.duplicate` | email or phone already stored |
-| `413` | `request.too_large` | body over 16 KiB (16384 bytes) |
-| `415` | `request.unsupported_media_type` | `Content-Type` missing or not `application/json` on `POST` |
+| `413` | `request.too_large` | body over 16 KiB (16384 bytes); over 1 MiB (1048576 bytes) for CSV import |
+| `415` | `request.unsupported_media_type` | `Content-Type` missing or wrong: `application/json` for `POST /api/v1/leads`, `text/csv` (UTF-8) for the import |
 | `422` | `lead.invalid` | field validation failed; `errors` lists each `field` and `code` |
 | `422` | `request.invalid_body` | body isn't a single JSON object (bad JSON, an array, duplicate keys, ...) |
 | `422` | `request.invalid` | bad query parameter, such as `limit=0` |
+| `422` | `import.rejected` | CSV import: some rows are invalid or duplicates; nothing was imported |
+| `422` | `import.invalid_file` | CSV import: the file or its header can't be used; nothing was imported |
 | `503` | `database.busy` / `database.not_migrated` / `database.unavailable` | see [Database errors](#database-errors) |
 | `500` | none (plain text) | unexpected server error |
 
@@ -199,6 +278,7 @@ Most errors have the form `{"detail": {"code": "...", ...}}`. Depending on the e
 
 - **No personal data in URLs.** uvicorn's access log records every request's path and query string. The API never needs personal data there (look leads up by id), and you shouldn't add it. For example, don't append `?email=...`.
 - **Validation and duplicate errors** report field names, codes, and lead ids, never the submitted values.
+- **CSV import errors** report row and column numbers, never cell values or header text. Uploaded files are processed in memory and never saved to disk.
 - **Database error messages** hide SQL parameter values, and printing a stored lead object in a log or traceback shows only its id.
 - **Lead data** is returned only to requests with the operator token. Anyone with the token can read every lead.
 
@@ -262,7 +342,8 @@ uv run pytest                # includes coverage, fails under 90%
 src/leadflow_ai/
   api/             HTTP routes, request limits, error responses (M2)
   db/              SQLAlchemy models, engine/session, Alembic migrations (M2)
-  services/        lead create/get/list and duplicate handling (M2)
+  services/        lead create/get/list, duplicate handling (M2), CSV batch import (M3)
+  imports/         CSV file reading and header checks (M3)
   leads/           pure-Python validation and normalization (M1)
   main.py          application factory
 alembic.ini        Alembic configuration (the database URL comes from settings)
@@ -270,4 +351,4 @@ tests/             unit, database, and API tests
 docs/adr/          architectural decision records
 ```
 
-Design decisions: [ADR 0001](docs/adr/0001-m0-foundation.md) (foundation), [ADR 0002](docs/adr/0002-m1-lead-validation.md) (validation), [ADR 0003](docs/adr/0003-m2-database-and-api.md) (database and API).
+Design decisions: [ADR 0001](docs/adr/0001-m0-foundation.md) (foundation), [ADR 0002](docs/adr/0002-m1-lead-validation.md) (validation), [ADR 0003](docs/adr/0003-m2-database-and-api.md) (database and API), [ADR 0004](docs/adr/0004-m3-csv-import.md) (CSV import).

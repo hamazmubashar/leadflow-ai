@@ -6,9 +6,11 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, ConfigDict
 
-from leadflow_ai.api.deps import JsonObjectBody, SessionDep
+from leadflow_ai.api.deps import CsvBody, JsonObjectBody, SessionDep
 from leadflow_ai.auth import require_operator
+from leadflow_ai.imports.csv_reader import read_leads_csv
 from leadflow_ai.leads import LeadSource
+from leadflow_ai.services.imports import import_leads
 from leadflow_ai.services.leads import (
     DEFAULT_PAGE_LIMIT,
     MAX_OFFSET,
@@ -19,6 +21,7 @@ from leadflow_ai.services.leads import (
 )
 
 PREFIX = "/api/v1/leads"
+IMPORT_PATH = f"{PREFIX}/import"
 
 router = APIRouter(prefix=PREFIX, tags=["leads"], dependencies=[Depends(require_operator)])
 
@@ -42,6 +45,13 @@ class LeadPage(BaseModel):
     items: list[LeadOut]
     limit: int
     offset: int
+
+
+class ImportOut(BaseModel):
+    """Result of an all-or-nothing CSV import. ``lead_ids`` are in file order."""
+
+    imported: int
+    lead_ids: list[str]
 
 
 # The body is parsed by a dependency (see api.deps), so describe it for OpenAPI here.
@@ -98,3 +108,20 @@ def retrieve(lead_id: str, session: SessionDep) -> LeadOut:
             status_code=404, detail={"code": "lead.not_found", "message": "Lead not found"}
         )
     return LeadOut.model_validate(record)
+
+
+@router.post(
+    "/import",
+    status_code=201,
+    response_model=ImportOut,
+    summary="Import leads from a CSV file (all or nothing)",
+    openapi_extra={
+        "requestBody": {
+            "required": True,
+            "content": {"text/csv": {"schema": {"type": "string", "format": "binary"}}},
+        }
+    },
+)
+def import_csv(body: CsvBody, session: SessionDep) -> ImportOut:
+    result = import_leads(session, read_leads_csv(body))
+    return ImportOut(imported=result.imported, lead_ids=list(result.lead_ids))
