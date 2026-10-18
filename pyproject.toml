@@ -1,7 +1,8 @@
 [project]
 name = "leadflow-ai"
 version = "0.8.0"
-description = "LeadFlow AI: lead validation, local SQLite storage, CSV import, rule-based scoring, lead lifecycle, reviewed response drafts with a simulated outbox, and an operator REST API."
+description = "LeadFlow AI: a local-first lead management API and operator dashboard with validation, CSV import, rule-based scoring, lead lifecycle, human-reviewed drafts with a simulated outbox, a fixed outreach workflow and optional local-LLM drafts."
+license = "MIT"
 readme = "README.md"
 requires-python = "==3.12.*"
 dependencies = [

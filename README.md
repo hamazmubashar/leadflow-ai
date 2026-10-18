@@ -1,6 +1,66 @@
 # LeadFlow AI
 
-A local-first service for collecting and validating sales leads.
+A local-first lead management system for small sales teams: capture and validate leads, import them from CSV, score and prioritise them, track each lead through its lifecycle, and prepare outreach drafts that a person reviews before anything happens. It comes with a REST API, an operator dashboard and an optional AI assistant that runs entirely on your own machine.
+
+**What this project demonstrates**
+
+- **Workflow automation with a human in the loop.** A versioned outreach workflow prepares drafts automatically, but only a person can approve them, and approval records a *simulated* send. Nothing is ever emailed.
+- **Data integrity enforced by the database**, not just the code: Alembic migrations, CHECK constraints, partial unique indexes and triggers that make drafts and the outbox immutable and stop duplicates, even under concurrent requests.
+- **Responsible use of AI.** Optional draft writing with a local model (Ollama), restricted to loopback, with prompt-injection-aware prompting, deterministic output checks, permanent provenance and a visible review warning. Its limits are documented, not hidden.
+- **Privacy by design.** Bearer-token auth on every API route, no personal data in errors or logs, and everything bound to `127.0.0.1`.
+- **Engineering quality.** Strict mypy, Ruff, a large automated test suite with full line and branch coverage of the backend, CI on every push, and an architecture decision record for every milestone.
+
+## Quickstart
+
+Needs Python 3.12 and [uv](https://docs.astral.sh/uv/) (macOS or Linux; the dev script uses `lsof` and `curl`). From a fresh clone:
+
+```sh
+git clone https://github.com/hamazmubashar/leadflow-ai.git && cd leadflow-ai
+uv sync --group ui
+uv run python -c "import pathlib, secrets; t = pathlib.Path('.env.example').read_text(); open('.env', 'x').write(t.replace('LEADFLOW_OPERATOR_TOKEN=', 'LEADFLOW_OPERATOR_TOKEN=' + secrets.token_urlsafe(32), 1))"
+uv run alembic upgrade head
+bash scripts/dev.sh
+```
+
+1. Installs the locked dependencies, including the dashboard.
+2. Creates `.env` from `.env.example` with a new random operator token. It refuses to overwrite an existing `.env`.
+3. Creates the local SQLite database (`leadflow.db`).
+4. Starts the API on `http://127.0.0.1:8001` and the dashboard on **http://127.0.0.1:8501**. Ctrl+C stops both.
+
+**Demo data (optional):** on the dashboard's **CSV Import** page, upload `demo/demo-leads.csv` (25 fictional leads), then run `uv run --group ui python scripts/seed_demo.py` in a second terminal to give some of them a history and pending drafts. **AI drafts** stay off until you set them up (see [AI-assisted drafts](#ai-assisted-drafts-m9-optional)).
+
+The repository is private; it is shared with clients on request.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    operator["Operator (browser)"] --> ui["Streamlit dashboard<br/>127.0.0.1:8501"]
+    ui -- "HTTP + bearer token" --> api["FastAPI REST API<br/>127.0.0.1:8001"]
+    scripts["curl / scripts"] -- "HTTP + bearer token" --> api
+    api --> services["Services<br/>validation, CSV import, scoring,<br/>lifecycle, drafts, workflow"]
+    services --> db[("SQLite<br/>leads, history, drafts,<br/>simulated outbox, workflow runs")]
+    services -. "optional, loopback only" .-> llm["Ollama local model"]
+```
+
+- **The API is the only way in.** The dashboard never opens the database; it uses the same authenticated endpoints as any client.
+- **Pure core, thin edges.** Validation, scoring rules, lifecycle transitions, templates, the workflow decision and the AI output checks are pure Python with no I/O, so they are tested directly.
+- **The database guards the rules too.** Migrations add constraints and triggers that refuse invalid states (a second pending draft, an outbox item for an unapproved draft, a false "completed" run), so a bug in one layer can't break them.
+
+## Screenshots
+
+All screenshots use the fictional demo data.
+
+| | |
+|---|---|
+| ![Dashboard overview](docs/screenshots/01-dashboard.png) | ![Lead detail with the AI draft button](docs/screenshots/02-lead-detail.png) |
+| **Dashboard:** KPIs, leads by status, score distribution, recent activity | **Lead detail:** score breakdown, status change, history, drafts and the local-AI button |
+| ![Draft review with the AI warning](docs/screenshots/03-draft-review.png) | ![Workflow runs](docs/screenshots/04-workflows.png) |
+| **Draft review:** an AI-assisted draft with its provenance and review warning | **Workflows:** preview or run the outreach workflow, with per-lead results |
+| ![Simulated outbox](docs/screenshots/05-outbox.png) | |
+| **Simulated outbox:** approved drafts recorded as *would be sent*; nothing is sent | |
+
+## Milestones
 
 - **M0, foundation:** a FastAPI service with a health endpoint, typed configuration, reusable operator authentication, and quality tooling.
 - **M1, lead validation:** pure-Python validation and normalization of lead input.
@@ -9,9 +69,10 @@ A local-first service for collecting and validating sales leads.
 - **M4, lead scoring:** a 0–100 score with a hot/warm/cold tier, calculated on request from versioned TOML rules, with a per-rule explanation.
 - **M5, lead lifecycle:** each lead has a status (new, contacted, qualified, won, lost), changed through allowed transitions, with an append-only activity history.
 - **M6, response drafts:** generate an email draft for a lead from a fixed template, have a person approve or reject it, and record approved drafts in a **simulated** outbox.
-- **M8, workflow runs:** a fixed, versioned "new-lead outreach" workflow that scores new leads and prepares introduction drafts for hot ones, with a preview mode, run history and per-lead results. A run never approves or sends anything.
 - **M7, dashboard:** a Streamlit operator dashboard (dark navy and orange) that uses only the REST API: KPIs and charts, leads with details and status changes, CSV import, scoring, activity, draft review and the simulated outbox.
+- **M8, workflow runs:** a fixed, versioned "new-lead outreach" workflow that scores new leads and prepares introduction drafts for hot ones, with a preview mode, run history and per-lead results. A run never approves or sends anything.
 - **M9, AI-assisted drafts (optional, off by default):** a local model running on your own machine (Ollama) writes the body of a draft from the lead's details and notes. The draft still waits for a person to approve or reject it.
+- **M10, portfolio readiness:** client-facing documentation, architecture overview, a fresh-clone quickstart, screenshots, a security and privacy review, and an MIT license.
 
 Everything runs on your machine, and it uses no paid services or external APIs. There's no machine learning; the only language model is the optional local one (M9), which is reached on `localhost` only.
 
@@ -673,3 +734,7 @@ docs/adr/          architectural decision records
 ```
 
 Design decisions: [ADR 0001](docs/adr/0001-m0-foundation.md) (foundation), [ADR 0002](docs/adr/0002-m1-lead-validation.md) (validation), [ADR 0003](docs/adr/0003-m2-database-and-api.md) (database and API), [ADR 0004](docs/adr/0004-m3-csv-import.md) (CSV import), [ADR 0005](docs/adr/0005-m4-lead-scoring.md) (lead scoring), [ADR 0006](docs/adr/0006-m5-lead-lifecycle.md) (lead lifecycle), [ADR 0007](docs/adr/0007-m6-drafts-and-simulated-outbox.md) (drafts and simulated outbox), [ADR 0008](docs/adr/0008-m7-dashboard.md) (dashboard), [ADR 0009](docs/adr/0009-m8-workflow-runs.md) (workflow runs), [ADR 0010](docs/adr/0010-m9-ai-assisted-drafts.md) (AI-assisted drafts).
+
+## License
+
+[MIT](LICENSE) © 2026 Hamaz Mubashar
