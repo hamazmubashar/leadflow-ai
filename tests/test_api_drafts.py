@@ -30,6 +30,9 @@ DRAFT_FIELDS = {
     "rejection_reason",
     "created_at",
     "decided_at",
+    "generator",
+    "model",
+    "prompt_version",
 }
 OUTBOX_FIELDS = {
     "id",
@@ -124,6 +127,9 @@ def test_create_returns_the_pending_draft_with_location(api: TestClient) -> None
         "status": "pending_review",
         "rejection_reason": None,
         "decided_at": None,
+        "generator": "template",
+        "model": None,
+        "prompt_version": None,
     }
     assert body["body"].startswith("Hello Ayesha Khan,\n\n")
     assert "35202" not in body["body"]  # notes are never used

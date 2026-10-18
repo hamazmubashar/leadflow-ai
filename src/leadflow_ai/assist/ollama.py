@@ -31,6 +31,7 @@ HTTP_NOT_FOUND = 404
 
 class GenerationErrorCode(StrEnum):
     DISABLED = "llm.disabled"
+    BUSY = "llm.busy"
     UNAVAILABLE = "llm.unavailable"
     MODEL_NOT_FOUND = "llm.model_not_found"
     TIMEOUT = "llm.timeout"

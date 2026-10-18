@@ -202,11 +202,12 @@ def test_the_network_exception_is_exactly_the_local_model_client() -> None:
     for relative, allowed in NETWORK_EXCEPTIONS.items():
         # No stale or wider exception.
         assert _network_top_levels(PACKAGE_DIR / relative) == allowed, relative
-    # Outside the assist package, only the AI-draft service uses it.
+    # Outside the assist package: the AI-draft service (which builds the client) and
+    # the API layer (error codes and the TextGenerator protocol only).
     importers = {
         str(path.relative_to(PACKAGE_DIR))
         for path in PACKAGE_DIR.rglob("*.py")
         if not str(path.relative_to(PACKAGE_DIR)).startswith("assist/")
         and any(m.startswith("leadflow_ai.assist") for m in _imports(path))
     }
-    assert importers == {"services/ai_drafts.py"}
+    assert importers == {"services/ai_drafts.py", "api/assist.py", "api/errors.py"}

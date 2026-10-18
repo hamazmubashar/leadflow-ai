@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict
 from leadflow_ai.api.deps import JsonObjectBody, SessionDep
 from leadflow_ai.auth import require_operator
 from leadflow_ai.db.models import LeadDraftRecord
-from leadflow_ai.drafts import DraftStatus, DraftTemplate
+from leadflow_ai.drafts import DraftGenerator, DraftStatus, DraftTemplate
 from leadflow_ai.services.drafts import (
     MAX_REASON_LENGTH,
     OutboxItem,
@@ -54,6 +54,10 @@ class DraftOut(BaseModel):
     rejection_reason: str | None
     created_at: datetime
     decided_at: datetime | None
+    # M9: how the body was produced. Subject and recipient never depend on it.
+    generator: DraftGenerator
+    model: str | None
+    prompt_version: str | None
 
 
 class DraftPage(BaseModel):

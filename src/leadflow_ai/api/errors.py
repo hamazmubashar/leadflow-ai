@@ -8,6 +8,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import OperationalError
 
+from leadflow_ai.assist import GenerationError, GenerationErrorCode
 from leadflow_ai.drafts import ELIGIBLE_LEAD_STATUSES
 from leadflow_ai.imports.csv_reader import CsvFileError
 from leadflow_ai.leads import LeadValidationError
@@ -245,6 +246,35 @@ async def _workflow_run_in_progress(request: Request, exc: Exception) -> JSONRes
     return _error(409, detail)
 
 
+# M9: fixed status and message per code. No model output, prompt or lead data, ever.
+_GENERATION_ERRORS: dict[GenerationErrorCode, tuple[int, str]] = {
+    GenerationErrorCode.DISABLED: (
+        503,
+        "AI-assisted drafts are not enabled; set LEADFLOW_LLM_URL to a local model server",
+    ),
+    GenerationErrorCode.BUSY: (
+        503,
+        "Another AI-assisted draft is being generated; try again when it has finished",
+    ),
+    GenerationErrorCode.UNAVAILABLE: (503, "The local model server is not reachable"),
+    GenerationErrorCode.MODEL_NOT_FOUND: (
+        503,
+        "The configured model is not installed on the local model server",
+    ),
+    GenerationErrorCode.TIMEOUT: (504, "The local model did not answer in time"),
+    GenerationErrorCode.INVALID_OUTPUT: (
+        502,
+        "The generated text did not pass the safety checks; nothing was saved",
+    ),
+}
+
+
+async def _generation_failed(request: Request, exc: Exception) -> JSONResponse:
+    code = cast(GenerationError, exc).code
+    status_code, message = _GENERATION_ERRORS[code]
+    return _error(status_code, {"code": code.value, "message": message})
+
+
 def register_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(RequestValidationError, _request_validation)
     app.add_exception_handler(InvalidRequestBodyError, _invalid_body)
@@ -260,4 +290,5 @@ def register_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(PendingDraftExistsError, _draft_pending_exists)
     app.add_exception_handler(DraftAlreadyDecidedError, _draft_already_decided)
     app.add_exception_handler(RunInProgressError, _workflow_run_in_progress)
+    app.add_exception_handler(GenerationError, _generation_failed)
     app.add_exception_handler(OperationalError, _database_unavailable)

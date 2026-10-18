@@ -8,6 +8,7 @@ import pytest
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
+from leadflow_ai.api.assist import router as assist_router
 from leadflow_ai.api.drafts import outbox_router
 from leadflow_ai.api.drafts import router as drafts_router
 from leadflow_ai.api.leads import router as leads_router
@@ -75,7 +76,7 @@ def test_unauthenticated_requests_never_reach_body_parsing_or_storage(api: TestC
 def test_all_api_routes_declare_operator_auth(api: TestClient) -> None:
     # Every operation the app serves under /api (per its OpenAPI schema) must be a
     # route of one of these routers, and every one of their routes must depend on auth.
-    routers = (leads_router, drafts_router, outbox_router, workflows_router)
+    routers = (leads_router, drafts_router, outbox_router, workflows_router, assist_router)
     served = {
         (method.upper(), path)
         for path, operations in api.get("/openapi.json").json()["paths"].items()
@@ -111,6 +112,8 @@ def test_all_api_routes_declare_operator_auth(api: TestClient) -> None:
             ("GET", "/api/v1/workflow-runs"),
             ("GET", "/api/v1/workflow-runs/{run_id}"),
             ("GET", "/api/v1/workflow-runs/{run_id}/items"),
+            ("POST", f"{LEADS}/{{lead_id}}/drafts/ai"),
+            ("GET", "/api/v1/assist/status"),
         }
     )
     for router in routers:

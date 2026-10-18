@@ -3,6 +3,7 @@
 Run with: ``uv run uvicorn --factory leadflow_ai.main:create_app``
 """
 
+import threading
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -10,6 +11,7 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 
 from leadflow_ai import __version__
+from leadflow_ai.api.assist import router as assist_router
 from leadflow_ai.api.drafts import outbox_router
 from leadflow_ai.api.drafts import router as drafts_router
 from leadflow_ai.api.errors import register_error_handlers
@@ -24,6 +26,7 @@ from leadflow_ai.api.workflows import router as workflows_router
 from leadflow_ai.config import Settings, get_settings
 from leadflow_ai.db.session import Database
 from leadflow_ai.scoring.rules import load_rules
+from leadflow_ai.services.ai_drafts import generator_from_settings
 
 
 class HealthResponse(BaseModel):
@@ -53,6 +56,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.database = database
     app.state.scoring_rules = scoring_rules
+    # M9: None unless LEADFLOW_LLM_URL is set (validated as loopback). Nothing connects
+    # to the model server at startup; the first AI-draft request does.
+    app.state.text_generator = generator_from_settings(resolved)
+    app.state.generation_lock = threading.Lock()
     app.dependency_overrides[get_settings] = lambda: resolved
     app.add_middleware(
         BodySizeLimitMiddleware,
@@ -64,6 +71,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(drafts_router)
     app.include_router(outbox_router)
     app.include_router(workflows_router)
+    app.include_router(assist_router)
 
     @app.get("/health", response_model=HealthResponse, tags=["system"])
     def health() -> HealthResponse:
