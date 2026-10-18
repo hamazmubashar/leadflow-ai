@@ -157,6 +157,24 @@ def test_a_person_still_decides_on_an_ai_draft(app: FastAPI, api: TestClient) ->
     assert message["status"] == "simulated"  # still nothing is sent
 
 
+def test_rejecting_an_ai_draft_never_creates_an_outbox_item(app: FastAPI, api: TestClient) -> None:
+    use(app, FakeModel())
+    status, created, _ = post_ai(api, lead(api))
+    assert status == 201
+    response = api.post(
+        f"{DRAFTS}/{created['id']}/reject", json={"reason": "Promises a time"}, headers=AUTH_HEADERS
+    )
+    assert response.status_code == 200
+    rejected = response.json()
+    assert rejected == {
+        **created,
+        "status": "rejected",
+        "rejection_reason": "Promises a time",
+        "decided_at": rejected["decided_at"],
+    }  # provenance and text unchanged; only the decision is recorded
+    assert api.get(OUTBOX, headers=AUTH_HEADERS).json()["items"] == []
+
+
 # --- errors -------------------------------------------------------------------------------------
 
 

@@ -8,6 +8,7 @@ import requests
 from pydantic import SecretStr
 
 from dashboard.api_client import (
+    AI_DRAFT_READ_TIMEOUT_SECONDS,
     CONNECT_TIMEOUT_SECONDS,
     ApiClient,
     ApiError,
@@ -519,3 +520,64 @@ def test_run_history_and_items() -> None:
     client, session = client_for(respond(200, {"items": [item], "limit": 100, "offset": 0}))
     assert client.list_workflow_run_items("r/1").items[0].reason == "not_hot"
     assert session.calls[0]["url"] == f"{BASE}/api/v1/workflow-runs/r%2F1/items"
+
+
+# --- M9: AI-assisted drafts -------------------------------------------------------------
+
+AI_DRAFT = {
+    **DRAFT,
+    "status": "pending_review",
+    "decided_at": None,
+    "generator": "local_llm",
+    "model": "qwen2.5:3b",
+    "prompt_version": "2026-10-15.1",
+}
+
+
+def test_a_draft_without_provenance_fields_is_a_template_draft() -> None:
+    client, _ = client_for(respond(200, DRAFT))  # an API older than 0.8.0
+    draft = client.get_draft("d1")
+    assert (draft.generator, draft.model, draft.prompt_version) == ("template", None, None)
+    assert not draft.is_ai_assisted
+
+
+def test_assist_status() -> None:
+    client, session = client_for(respond(200, {"enabled": True, "model": "qwen2.5:3b"}))
+    status = client.assist_status()
+    assert (status.enabled, status.model) == (True, "qwen2.5:3b")
+    call = session.calls[0]
+    assert (call["method"], call["url"]) == ("GET", f"{BASE}/api/v1/assist/status")
+    assert call["headers"]["Authorization"] == f"Bearer {TOKEN}"
+
+
+def test_create_ai_draft_posts_once_with_a_long_read_timeout() -> None:
+    client, session = client_for(respond(201, AI_DRAFT))
+    draft = client.create_ai_draft("a/b", DraftTemplate.INTRODUCTION)
+    assert draft.is_ai_assisted and draft.model == "qwen2.5:3b"
+    assert draft.status is DraftStatus.PENDING_REVIEW
+    [call] = session.calls
+    assert (call["method"], call["url"]) == ("POST", f"{BASE}/api/v1/leads/a%2Fb/drafts/ai")
+    assert call["json"] == {"template": "introduction"}
+    assert call["timeout"] == (CONNECT_TIMEOUT_SECONDS, AI_DRAFT_READ_TIMEOUT_SECONDS)
+    assert AI_DRAFT_READ_TIMEOUT_SECONDS > 300  # longer than the API's maximum model timeout
+    assert call["allow_redirects"] is False
+
+
+def test_other_requests_keep_the_normal_timeout() -> None:
+    client, session = client_for(respond(201, DRAFT))
+    client.create_draft("x", DraftTemplate.INTRODUCTION)
+    assert session.calls[0]["timeout"] == (CONNECT_TIMEOUT_SECONDS, 7)
+
+
+def test_an_ai_draft_timeout_is_not_retried() -> None:
+    client, session = client_for(requests.ReadTimeout("read timed out"))
+    error = raised(lambda: client.create_ai_draft("x", DraftTemplate.INTRODUCTION))
+    assert error.kind is ApiErrorKind.TIMEOUT
+    assert len(session.calls) == 1
+
+
+def test_llm_errors_keep_only_code_and_fixed_message() -> None:
+    body = {"detail": {"code": "llm.timeout", "message": "The local model did not answer in time"}}
+    client, _ = client_for(respond(504, body))
+    error = raised(lambda: client.create_ai_draft("x", DraftTemplate.INTRODUCTION))
+    assert (error.status_code, error.code) == (504, "llm.timeout")

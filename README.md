@@ -11,8 +11,9 @@ A local-first service for collecting and validating sales leads.
 - **M6, response drafts:** generate an email draft for a lead from a fixed template, have a person approve or reject it, and record approved drafts in a **simulated** outbox.
 - **M8, workflow runs:** a fixed, versioned "new-lead outreach" workflow that scores new leads and prepares introduction drafts for hot ones, with a preview mode, run history and per-lead results. A run never approves or sends anything.
 - **M7, dashboard:** a Streamlit operator dashboard (dark navy and orange) that uses only the REST API: KPIs and charts, leads with details and status changes, CSV import, scoring, activity, draft review and the simulated outbox.
+- **M9, AI-assisted drafts (optional, off by default):** a local model running on your own machine (Ollama) writes the body of a draft from the lead's details and notes. The draft still waits for a person to approve or reject it.
 
-Everything runs on your machine, and it uses no paid services or external APIs. There's no machine learning or LLM.
+Everything runs on your machine, and it uses no paid services or external APIs. There's no machine learning; the only language model is the optional local one (M9), which is reached on `localhost` only.
 
 > **LeadFlow AI does not send anything.** No emails, SMS, or other messages are ever sent. M6's outbox is **simulated**: approving a draft only records that it *would* be sent. There's no sending code, mail server setting, or delivery worker, and nothing contacts an external service.
 
@@ -52,6 +53,9 @@ Settings come from environment variables or from `.env` in the directory you run
 | `LEADFLOW_OPERATOR_TOKEN` | yes | Bearer token for the lead API, at least 32 characters |
 | `LEADFLOW_DATABASE_URL` | no | Local SQLite file URL (default `sqlite:///./leadflow.db`); other databases are rejected |
 | `LEADFLOW_SCORING_RULES_PATH` | no | Path to your own scoring rules TOML file; the built-in rules are used when it's unset or empty (see [Lead scoring](#lead-scoring-get-apiv1leadsidscore)) |
+| `LEADFLOW_LLM_URL` | no | Local Ollama URL, e.g. `http://127.0.0.1:11434`. Unset or empty means AI-assisted drafts are **off**. Only `localhost`, `127.0.0.1` or `::1` over `http://` are accepted; anything else stops startup (see [AI-assisted drafts](#ai-assisted-drafts-m9-optional)) |
+| `LEADFLOW_LLM_MODEL` | no | Model name in Ollama (default `qwen2.5:3b`) |
+| `LEADFLOW_LLM_TIMEOUT_SECONDS` | no | How long to wait for one generation, 5–300 (default `120`) |
 
 - **Relative path:** the default path `./leadflow.db` is relative to the directory you run commands from. Run `alembic` and `uvicorn` from the same place, normally the project root.
 - **Accepted URLs:** only local SQLite file URLs (`sqlite:///relative.db` or `sqlite:////absolute/path.db`). Other databases, in-memory databases, hosts, credentials, and query parameters are rejected at startup.
@@ -65,7 +69,7 @@ Alembic creates and upgrades the schema. The app never creates tables itself.
 
 ```sh
 uv run alembic upgrade head     # creates ./leadflow.db (or LEADFLOW_DATABASE_URL) and its tables
-uv run alembic current          # shows the applied revision, e.g. "0004 (head)"
+uv run alembic current          # shows the applied revision, e.g. "0005 (head)"
 ```
 
 - **Token:** migrations read only `LEADFLOW_DATABASE_URL`, so they don't need the operator token.
@@ -75,6 +79,7 @@ uv run alembic current          # shows the applied revision, e.g. "0004 (head)"
 - **Upgrades are all-or-nothing.** Each upgrade runs in a single transaction: if any step fails, the database is left exactly as it was and `alembic current` still shows the previous revision.
 - **Upgrading to 0.5.0 (migration `0002`)** gives every existing lead the status `new` and one `lead_created` history event. Those events are **reconstructed** from each lead's stored `created_at`, because no history was recorded before M5. `uv run alembic downgrade 0001` removes the lifecycle data but keeps the leads.
 - **Upgrading to 0.7.0 (migration `0004`)** only adds the `workflow_runs` and `workflow_run_items` tables; existing tables and data are unchanged. `uv run alembic downgrade 0003` **permanently deletes the run history**; drafts created by runs are ordinary drafts and are kept.
+- **Upgrading to 0.8.0 (migration `0005`)** adds three columns to `lead_drafts` (`generator`, `model`, `prompt_version`) without rebuilding the table; every existing draft becomes `generator = 'template'`, which is what it was. Back up first (`cp leadflow.db ~/leadflow-before-0005.db` with the server stopped). `uv run alembic downgrade 0004` is **refused** while any AI-assisted draft exists, because removing the columns would make those drafts look like template drafts.
 - **Upgrading to 0.6.0 (migration `0003`)** only adds the `lead_drafts` and `outbox_messages` tables; existing tables and data are unchanged. `uv run alembic downgrade 0002` **permanently deletes all drafts and outbox items** and keeps leads and their history, so back up first.
 
 ## Run the server
@@ -87,7 +92,7 @@ Add `--reload` while developing. The server listens on `http://127.0.0.1:8000`, 
 
 ```sh
 curl http://127.0.0.1:8000/health
-# {"status":"ok","version":"0.7.0"}
+# {"status":"ok","version":"0.8.0"}
 ```
 
 **`/health` doesn't check the database.** It only shows that the process is running. The app opens the database on the first lead request, so a healthy server can still answer lead requests with `503` (see [Database errors](#database-errors)).
@@ -490,6 +495,42 @@ curl -X POST http://127.0.0.1:8000/api/v1/workflows/new-lead-outreach/runs \
 - `failed` (`error_code: recording_failed`) means a result could not be saved and the run stopped.
 - `interrupted` (`stale_heartbeat`) means the server stopped mid-run. The next run marks it after 5 minutes without a heartbeat and continues with the leads it didn't reach. No lead ever gets a duplicate draft, because each draft is saved together with its result.
 
+### AI-assisted drafts (M9, optional)
+
+A local model writes the **body** of a draft. Everything else stays as in M6: the subject and recipient come from the template, the greeting (`Hello {name},`) and sign-off (`Kind regards`) are fixed text, the draft is stored as `pending_review`, and only a person can approve or reject it. Approval still only records a **simulated** outbox item. The M8 workflow never uses the model.
+
+**Turn it on (free, local):**
+
+1. Install [Ollama](https://ollama.com) and pull a small model: `ollama pull qwen2.5:3b`.
+2. Add `LEADFLOW_LLM_URL=http://127.0.0.1:11434` to `.env` (optionally `LEADFLOW_LLM_MODEL`).
+3. Restart the API. Nothing connects to Ollama at startup; the first AI-draft request does.
+
+**Use it.** In the dashboard, open a lead: the **Draft with local AI** button appears only when the API reports the feature is enabled. Generation can take up to a minute on a laptop; the button is disabled while a request runs, and the dashboard never retries. Or call the API:
+
+```sh
+curl http://127.0.0.1:8000/api/v1/assist/status -H "Authorization: Bearer $LEADFLOW_OPERATOR_TOKEN"
+# {"enabled": true, "model": "qwen2.5:3b"}   (never contacts Ollama; never shows the URL)
+
+curl -X POST http://127.0.0.1:8000/api/v1/leads/LEAD_ID/drafts/ai \
+  -H "Authorization: Bearer $LEADFLOW_OPERATOR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"template": "introduction"}'
+# 201 Created: a normal draft with "generator": "local_llm", "model": "qwen2.5:3b",
+# "prompt_version": "...", "status": "pending_review"
+```
+
+Every draft response now includes `generator` (`template` or `local_llm`), `model` and `prompt_version`.
+
+**Safeguards:**
+- **Local only.** The URL must be loopback; proxy environment variables are ignored and redirects are refused, so lead data never leaves your machine through this feature.
+- **Notes are data, not instructions.** Name, company and notes are sent as JSON inside a delimited block; the prompt says to ignore any instructions in them.
+- **Automatic output checks.** The text is rejected (`llm.invalid_output`, nothing saved) if it contains a link, an `@`, a phone-like number, markup or placeholders (`[ ] { } < > * # | \` and backticks), control characters, more than three paragraphs, or is shorter than 40 or longer than 1500 characters. A greeting or sign-off the model adds anyway is removed, because the code adds its own.
+- **One generation at a time.** A second request while one runs gets `llm.busy` at once instead of queueing.
+- **No lock while generating.** The model runs with no database transaction open; eligibility and the one-pending-draft rule are checked again before saving.
+- **Provenance is permanent.** A database trigger allows only two shapes (`template` with no model, or `local_llm` with a model, a prompt version and status `pending_review`), and the content-immutability trigger covers these columns.
+
+**Limits: the prompt is not a guarantee.** The model is told not to mention internal notes, dates, prices or promises, but small models don't always follow instructions, and the automatic checks only catch the structural problems listed above. In testing, `qwen2.5:3b` wrote *"How does tomorrow afternoon work for you?"*, a time commitment the prompt forbids. Words like "tomorrow" are deliberately **not** blocked automatically, because ordinary text (the template itself says "next week") would be rejected too. That is why every AI draft carries the warning *"Written by a local AI model from internal notes. Check for internal remarks, dates or promises before approving."* Read every AI draft before approving it, and reject it when in doubt.
+
 ### Errors
 
 Most errors have the form `{"detail": {"code": "...", ...}}`. Depending on the error, `detail` also has a `message`, a list of `errors`, `row_errors`, or `conflicts`. Errors never include the values you sent.
@@ -516,6 +557,11 @@ Most errors have the form `{"detail": {"code": "...", ...}}`. Depending on the e
 | `422` | `import.rejected` | CSV import: some rows are invalid or duplicates; nothing was imported |
 | `422` | `import.invalid_file` | CSV import: the file or its header can't be used; nothing was imported |
 | `503` | `database.busy` / `database.not_migrated` / `database.unavailable` | see [Database errors](#database-errors) |
+| `503` | `llm.disabled` | AI-assisted drafts are off (`LEADFLOW_LLM_URL` unset) |
+| `503` | `llm.busy` | another AI draft is being generated |
+| `503` | `llm.unavailable` / `llm.model_not_found` | Ollama isn't running, or the model isn't installed |
+| `504` | `llm.timeout` | the model didn't answer within `LEADFLOW_LLM_TIMEOUT_SECONDS` |
+| `502` | `llm.invalid_output` | the generated text failed the output checks; nothing was saved |
 | `500` | none (plain text) | unexpected server error |
 
 **Check order:** body size (`413`), then token (`401`), then content type (`415`), then body content (`422`). For example, an unauthenticated oversized request gets `413`, and an unauthenticated `text/plain` request gets `401`.
@@ -541,6 +587,7 @@ Most errors have the form `{"detail": {"code": "...", ...}}`. Depending on the e
 - **CSV import errors** report row and column numbers, never cell values or header text. Uploaded files are processed in memory and never saved to disk.
 - **Database error messages** hide SQL parameter values, and printing a stored lead object in a log or traceback shows only its id.
 - **Lead data** is returned only to requests with the operator token. Anyone with the token can read every lead.
+- **AI-assisted drafts (M9)** send the lead's name, company and notes to the local model only (loopback). Notes, prompts and model output are never logged and never appear in error responses; errors carry a fixed `llm.*` code and message.
 - **Draft text, recipients and rejection reasons** are returned only to requests with the operator token. They never appear in error responses, and printing a draft or outbox object shows only its id (and a draft's status).
 
 ## Lead validation in Python
@@ -608,12 +655,14 @@ src/leadflow_ai/
   api/             HTTP routes, request limits, error responses (M2)
   db/              SQLAlchemy models, engine/session, Alembic migrations (M2)
   services/        lead create/get/list, duplicate handling (M2), CSV batch import (M3),
-                   status changes (M5), drafts and the simulated outbox (M6), workflow runs (M8)
+                   status changes (M5), drafts and the simulated outbox (M6), workflow runs (M8),
+                   AI-assisted drafts (M9)
   imports/         CSV file reading and header checks (M3)
   scoring/         scoring rules (default_rules.toml), validation and the pure scoring engine (M4)
   lifecycle/       lead statuses and the allowed transitions (M5)
   drafts/          fixed email templates and draft statuses (M6)
   workflows/       the fixed, versioned new-lead outreach workflow and its decision rule (M8)
+  assist/          local-model prompt, output checks and the loopback-only Ollama client (M9)
   leads/           pure-Python validation and normalization (M1)
   main.py          application factory
 alembic.ini        Alembic configuration (the database URL comes from settings)
@@ -623,4 +672,4 @@ scripts/dev.sh     starts the API and the dashboard together
 docs/adr/          architectural decision records
 ```
 
-Design decisions: [ADR 0001](docs/adr/0001-m0-foundation.md) (foundation), [ADR 0002](docs/adr/0002-m1-lead-validation.md) (validation), [ADR 0003](docs/adr/0003-m2-database-and-api.md) (database and API), [ADR 0004](docs/adr/0004-m3-csv-import.md) (CSV import), [ADR 0005](docs/adr/0005-m4-lead-scoring.md) (lead scoring), [ADR 0006](docs/adr/0006-m5-lead-lifecycle.md) (lead lifecycle), [ADR 0007](docs/adr/0007-m6-drafts-and-simulated-outbox.md) (drafts and simulated outbox), [ADR 0008](docs/adr/0008-m7-dashboard.md) (dashboard), [ADR 0009](docs/adr/0009-m8-workflow-runs.md) (workflow runs).
+Design decisions: [ADR 0001](docs/adr/0001-m0-foundation.md) (foundation), [ADR 0002](docs/adr/0002-m1-lead-validation.md) (validation), [ADR 0003](docs/adr/0003-m2-database-and-api.md) (database and API), [ADR 0004](docs/adr/0004-m3-csv-import.md) (CSV import), [ADR 0005](docs/adr/0005-m4-lead-scoring.md) (lead scoring), [ADR 0006](docs/adr/0006-m5-lead-lifecycle.md) (lead lifecycle), [ADR 0007](docs/adr/0007-m6-drafts-and-simulated-outbox.md) (drafts and simulated outbox), [ADR 0008](docs/adr/0008-m7-dashboard.md) (dashboard), [ADR 0009](docs/adr/0009-m8-workflow-runs.md) (workflow runs), [ADR 0010](docs/adr/0010-m9-ai-assisted-drafts.md) (AI-assisted drafts).

@@ -96,6 +96,16 @@ class DraftStatus(StrEnum):
     REJECTED = "rejected"
 
 
+DraftGenerator = Literal["template", "local_llm"]
+
+
+class AssistStatus(_ApiModel):
+    """``GET /api/v1/assist/status``: whether AI-assisted drafts are configured (M9)."""
+
+    enabled: bool
+    model: str | None
+
+
 class Draft(_ApiModel):
     id: str
     lead_id: str
@@ -109,6 +119,14 @@ class Draft(_ApiModel):
     rejection_reason: str | None
     created_at: datetime
     decided_at: datetime | None
+    # M9 provenance. Defaults keep the dashboard working against an older API.
+    generator: DraftGenerator = "template"
+    model: str | None = None
+    prompt_version: str | None = None
+
+    @property
+    def is_ai_assisted(self) -> bool:
+        return self.generator == "local_llm"
 
 
 class DraftPage(_ApiModel):

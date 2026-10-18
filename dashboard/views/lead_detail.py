@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 
 import streamlit as st
 
+from dashboard import assist
 from dashboard.api_client import ApiClient, ApiError
 from dashboard.leads import (
     SOURCE_LABELS,
@@ -64,6 +65,7 @@ def render_lead_detail(client: ApiClient, row: LeadRow) -> None:
             _history(detail)
         with drafts_col:
             _drafts(client, row, detail)
+            _ai_draft(client, row)
 
 
 def _header(row: LeadRow, detail: LeadDetail) -> None:
@@ -166,11 +168,12 @@ def _drafts(client: ApiClient, row: LeadRow, detail: LeadDetail) -> None:
             rows.append(
                 [
                     cell(TEMPLATE_LABELS[draft.template], small=f"v{draft.template_version}"),
+                    cell(assist.provenance_label(draft) or "Template", muted=True),
                     f"<td>{pill(label, tone)}</td>",
                     cell(time_ago(draft.created_at, now), muted=True),
                 ]
             )
-        html_table(["Template", "Status", "Created"], rows)
+        html_table(["Template", "Written by", "Status", "Created"], rows)
         st.caption("Review and approve drafts on the **Drafts** page.")
     with st.form(f"lead.draft.{row.id}", border=False):
         template = st.selectbox(
@@ -193,3 +196,90 @@ def _drafts(client: ApiClient, row: LeadRow, detail: LeadDetail) -> None:
         "It awaits human review on the Drafts page.",
     )
     st.rerun()
+
+
+# --- M9: AI-assisted drafts ---------------------------------------------------------------
+
+
+def _ai_errors_key(lead_id: str) -> str:
+    return f"assist.errors.{lead_id}"
+
+
+def _ai_draft(client: ApiClient, row: LeadRow) -> None:
+    """The "Draft with local AI" control. Shown only when the API says AI is enabled.
+
+    Clicking records the request (``assist.begin``) in a callback, so the rerun that sends
+    it already renders the button disabled. ``take_unsent`` hands the request out once:
+    if that run is interrupted, the request is never sent again from the dashboard.
+    """
+    try:
+        status = client.assist_status()
+    except ApiError:
+        st.caption("AI drafts: status unavailable.")
+        return
+    if not assist.offer_ai(status):
+        return
+
+    state = st.session_state
+    now = datetime.now(UTC)
+    pending = assist.running(state, now)
+    busy = pending is not None
+    st.markdown("**Draft with local AI**")
+    template_key = f"assist.template.{row.id}"
+    st.selectbox(
+        "Template for the AI draft",
+        list(DraftTemplate),
+        format_func=TEMPLATE_LABELS.__getitem__,
+        key=template_key,
+        disabled=busy,
+    )
+    st.button(
+        "Draft with local AI",
+        icon=":material/auto_awesome:",
+        disabled=busy,
+        key=f"assist.button.{row.id}",
+        on_click=_start_ai_request,
+        args=(row.id, template_key),
+        help="A local model writes the message body. The draft waits for your review.",
+    )
+    st.caption(f"Model: {escape_markdown(status.model or 'local model')}. {assist.AI_LIMITS_NOTE}")
+
+    errors = state.pop(_ai_errors_key(row.id), None)
+    if isinstance(errors, list):
+        show_error_lines("No AI draft was created:", [str(line) for line in errors])
+
+    request = assist.take_unsent(state, row.id, now)
+    if request is None:
+        if pending is not None and pending.sent and pending.lead_id == row.id:
+            st.info(
+                "The last AI request was interrupted before its result was shown. "
+                "Check this lead's drafts before trying again.",
+                icon=":material/info:",
+            )
+            if st.button("Dismiss", key=f"assist.dismiss.{row.id}"):
+                assist.finish(state)
+                clear_lead_data()
+                st.rerun()
+        return
+    try:
+        with st.spinner(assist.WAIT_MESSAGE):
+            client.create_ai_draft(row.id, request.template)
+    except ApiError as error:
+        assist.finish(state)
+        clear_lead_data()
+        state[_ai_errors_key(row.id)] = assist.describe_ai_error(error)
+        st.rerun()
+    assist.finish(state)
+    clear_lead_data()
+    set_flash(
+        FLASH_KEY,
+        f"AI-assisted {TEMPLATE_LABELS[request.template].lower()} draft created for "
+        f"{row.full_name}. Read it carefully on the Drafts page before deciding.",
+    )
+    st.rerun()
+
+
+def _start_ai_request(lead_id: str, template_key: str) -> None:
+    template = st.session_state.get(template_key)
+    if isinstance(template, DraftTemplate):
+        assist.begin(st.session_state, lead_id, template, datetime.now(UTC))

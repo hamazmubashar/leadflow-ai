@@ -107,6 +107,7 @@ class DraftItem:
     status: DraftStatus
     created_at: datetime
     decided_at: datetime | None
+    ai_model: str | None = None  # M9: set only for AI-assisted drafts
 
 
 @dataclass(frozen=True)
@@ -164,6 +165,7 @@ def fetch_lead_snapshot(client: LeadReader, *, max_leads: int = MAX_LEADS) -> Le
                     status=draft.status,
                     created_at=draft.created_at,
                     decided_at=draft.decided_at,
+                    ai_model=(draft.model or "local model") if draft.is_ai_assisted else None,
                 )
             )
         rows.append(

@@ -18,6 +18,7 @@ from dashboard.config import DashboardSettings
 from dashboard.models import (
     Activity,
     Approval,
+    AssistStatus,
     Draft,
     DraftPage,
     DraftTemplate,
@@ -38,6 +39,11 @@ from dashboard.models import (
 CONNECT_TIMEOUT_SECONDS = 3.05
 MAX_PAGE_LIMIT = 100  # the API's maximum ``limit`` for every list endpoint
 WORKFLOW_START_PATH = "/api/v1/workflows/new-lead-outreach/runs"
+ASSIST_STATUS_PATH = "/api/v1/assist/status"
+# An AI draft can take a minute or more on a laptop; the API's own model timeout is
+# LEADFLOW_LLM_TIMEOUT_SECONDS (120 by default, at most 300). Wait a little longer than
+# that maximum, so the API, not the dashboard, decides when generation has failed.
+AI_DRAFT_READ_TIMEOUT_SECONDS = 330.0
 JsonObject = dict[str, Any]
 
 
@@ -222,6 +228,27 @@ class ApiClient:
             ),
         )
 
+    def assist_status(self) -> AssistStatus:
+        """``GET /api/v1/assist/status``. The API answers without contacting the model."""
+        return _validate(AssistStatus, self._request("GET", ASSIST_STATUS_PATH))
+
+    def create_ai_draft(self, lead_id: str, template: DraftTemplate) -> Draft:
+        """``POST /api/v1/leads/{id}/drafts/ai``: a local model writes the body.
+
+        Sent once and never retried. The draft still awaits human review. Uses a long
+        read timeout because generation is slow; a dashboard timeout does not mean the
+        API failed, so callers must tell the operator to check before trying again.
+        """
+        return _validate(
+            Draft,
+            self._request(
+                "POST",
+                f"/api/v1/leads/{_segment(lead_id)}/drafts/ai",
+                json={"template": template.value},
+                read_timeout=AI_DRAFT_READ_TIMEOUT_SECONDS,
+            ),
+        )
+
     def get_draft(self, draft_id: str) -> Draft:
         return _validate(Draft, self._request("GET", f"/api/v1/drafts/{_segment(draft_id)}"))
 
@@ -286,6 +313,7 @@ class ApiClient:
         json: JsonObject | None = None,
         data: bytes | None = None,
         content_type: str | None = None,
+        read_timeout: float | None = None,
     ) -> JsonObject:
         headers = {"Accept": "application/json"}
         if content_type is not None:
@@ -300,7 +328,9 @@ class ApiClient:
                 json=json,
                 data=data,
                 headers=headers,
-                timeout=self._timeout,
+                timeout=self._timeout
+                if read_timeout is None
+                else (CONNECT_TIMEOUT_SECONDS, read_timeout),
                 allow_redirects=False,  # never forward the token to another location
             )
         except requests.Timeout:

@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 
 import streamlit as st
 
+from dashboard import assist
 from dashboard.api_client import ApiClient, ApiError
 from dashboard.leads import TEMPLATE_LABELS, DraftItem, LeadRow, describe_api_error
 from dashboard.models import Draft, DraftStatus, DraftTemplate
@@ -131,6 +132,7 @@ def _draft_table(drafts: list[DraftItem]) -> DraftItem | None:
                 "Lead": draft.lead_name,
                 "Company": draft.company or "",
                 "Template": TEMPLATE_LABELS[draft.template],
+                "Written by": f"AI · {draft.ai_model}" if draft.ai_model else "Template",
                 "Status": STATUS_LABELS[draft.status][0],
                 "Created": time_ago(draft.created_at, now),
                 "Decided": time_ago(draft.decided_at, now) if draft.decided_at else "",
@@ -155,13 +157,23 @@ def _review(client: ApiClient, item: DraftItem) -> None:
         return
 
     label, tone = STATUS_LABELS[draft.status]
+    provenance = assist.provenance_label(draft)
     with st.container(border=True):
         st.markdown(
             f"### {escape_markdown(item.lead_name)}  \n"
             f"{pill(label, tone)} {pill(TEMPLATE_LABELS[draft.template], Tone.ACCENT)} "
-            f"{pill('Version ' + draft.template_version, Tone.NEUTRAL)}",
+            f"{pill('Version ' + draft.template_version, Tone.NEUTRAL)}"
+            + (f" {pill(provenance, Tone.WARNING)}" if provenance else ""),
             unsafe_allow_html=True,
         )
+        if provenance:
+            # Shown for every AI-assisted draft, whatever its status (also after a decision).
+            st.warning(assist.AI_WARNING, icon=":material/warning:")
+            text_card(
+                "Written by",
+                f"Local model {draft.model or 'unknown'} · prompt {draft.prompt_version or '—'}"
+                " · subject, greeting and sign-off are fixed text",
+            )
         to_col, channel_col = st.columns([3, 1])
         with to_col:
             text_card("To", draft.recipient)
