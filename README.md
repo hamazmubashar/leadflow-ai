@@ -170,7 +170,7 @@ bash scripts/dev.sh       # API on 127.0.0.1:8001, dashboard on http://127.0.0.1
 ```
 
 - **Ports:** `API_PORT=8002 bash scripts/dev.sh` uses another API port. The script refuses to start, and names the program, if a port is already taken.
-- **Configuration:** the dashboard reads the same `.env` as the API: `LEADFLOW_OPERATOR_TOKEN`, plus the optional `LEADFLOW_API_URL` (default `http://127.0.0.1:8000`; plain `http://` only for localhost). Restart the dashboard after editing `.env`.
+- **Configuration:** the dashboard reads the same `.env` as the API: `LEADFLOW_OPERATOR_TOKEN`, plus `LEADFLOW_API_URL` (`.env.example` sets `http://127.0.0.1:8001`, the port `scripts/dev.sh` uses; the built-in default is `http://127.0.0.1:8000`; plain `http://` only for localhost). `scripts/dev.sh` passes its own API URL to the dashboard, but other tools such as `scripts/seed_demo.py` read it from `.env`. Restart the dashboard after editing `.env`.
 - **Local only:** `.streamlit/config.toml` binds the dashboard to `127.0.0.1` and turns off Streamlit's usage statistics.
 
 **Pages** (sidebar order):
