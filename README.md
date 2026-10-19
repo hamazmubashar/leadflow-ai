@@ -643,6 +643,8 @@ Most errors have the form `{"detail": {"code": "...", ...}}`. Depending on the e
 
 ## Privacy
 
+The full security and privacy review, with accepted risks, is in [docs/security-review.md](docs/security-review.md).
+
 - **No personal data in URLs.** uvicorn's access log records every request's path and query string. The API never needs personal data there (look leads up by id), and you shouldn't add it. For example, don't append `?email=...`.
 - **Validation and duplicate errors** report field names, codes, and lead ids, never the submitted values.
 - **CSV import errors** report row and column numbers, never cell values or header text. Uploaded files are processed in memory and never saved to disk.
