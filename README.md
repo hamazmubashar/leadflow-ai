@@ -56,7 +56,7 @@ All screenshots use the fictional demo data.
 | ![Dashboard overview](docs/screenshots/01-dashboard.png) | ![Lead detail with the AI draft button](docs/screenshots/02-lead-detail.png) |
 | **Dashboard:** KPIs, leads by status, score distribution, recent activity | **Lead detail:** score breakdown, status change, history, drafts and the local-AI button |
 | ![Draft review with the AI warning](docs/screenshots/03-draft-review.png) | ![Workflow runs](docs/screenshots/04-workflows.png) |
-| **Draft review:** an AI-assisted draft with its provenance and review warning | **Workflows:** preview or run the outreach workflow, with per-lead results |
+| **Draft review:** an AI-assisted draft with its provenance and review warning. Here the model invented "bakery supplies" and offered samples, exactly what the reviewer must catch before approving | **Workflows:** preview or run the outreach workflow, with per-lead results |
 | ![Simulated outbox](docs/screenshots/05-outbox.png) | |
 | **Simulated outbox:** approved drafts recorded as *would be sent*; nothing is sent | |
 
