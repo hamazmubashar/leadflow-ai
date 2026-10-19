@@ -42,7 +42,7 @@ uv export --all-groups --no-hashes --no-emit-project -o /tmp/leadflow-requiremen
 uvx pip-audit -r /tmp/leadflow-requirements.txt --no-deps --disable-pip
 ```
 
-Result on 2026-10-19: _to be filled in when the scan is run._
+Result on 2026-10-19: **no known vulnerabilities** in the 65 locked packages (all dependency groups, including platform-specific ones), checked with `pip-audit` against the PyPI advisory data. This is a point-in-time result; rerun it before each release.
 
 ## Out of scope
 
