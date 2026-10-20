@@ -22,6 +22,7 @@ from sqlalchemy import exists, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from leadflow_ai.accounts import SYSTEM_USER_ID
 from leadflow_ai.assist import (
     PROMPT_VERSION,
     GenerationError,
@@ -60,6 +61,8 @@ def create_ai_draft(
     lead: LeadRecord,
     template: DraftTemplate,
     generator: TextGenerator | None,
+    *,
+    actor_id: str = SYSTEM_USER_ID,
 ) -> LeadDraftRecord:
     """Generate a body for ``lead`` and store it as a pending draft, in one commit.
 
@@ -84,7 +87,9 @@ def create_ai_draft(
         prompt_version=PROMPT_VERSION,
     )
 
-    draft = stage_pending_draft(session, lead, template, generated=body)  # re-checks
+    draft = stage_pending_draft(
+        session, lead, template, generated=body, created_by_id=actor_id
+    )  # re-checks
     try:
         session.commit()
     except IntegrityError as exc:

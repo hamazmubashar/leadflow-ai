@@ -4,6 +4,7 @@ import uuid
 from datetime import UTC, datetime
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     ForeignKey,
     Index,
@@ -15,6 +16,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql.elements import conv
 
+from leadflow_ai.accounts import SYSTEM_USER_ID, Role
 from leadflow_ai.db.base import Base
 from leadflow_ai.db.types import UTCDateTime
 from leadflow_ai.drafts import (
@@ -125,13 +127,15 @@ class LeadEventRecord(Base):
     to_status: Mapped[str] = mapped_column(String(20))
     note: Mapped[str | None] = mapped_column(String(500))
     occurred_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=_utc_now)
+    # M11 audit: the account that caused the event (NULL: recorded before 0.9.0).
+    actor_id: Mapped[str | None] = mapped_column(String(36))
 
     def __repr__(self) -> str:
         # Never include the note, which may contain personal data.
         return f"LeadEventRecord(id={self.id!r}, sequence={self.sequence!r})"
 
 
-def lead_created_event(lead: LeadRecord) -> LeadEventRecord:
+def lead_created_event(lead: LeadRecord, actor_id: str = SYSTEM_USER_ID) -> LeadEventRecord:
     """The ``lead_created`` event (sequence 1) for a lead that has just been flushed."""
     return LeadEventRecord(
         lead_id=lead.id,
@@ -141,6 +145,7 @@ def lead_created_event(lead: LeadRecord) -> LeadEventRecord:
         to_status=INITIAL_STATUS.value,
         note=None,
         occurred_at=lead.created_at,
+        actor_id=actor_id,
     )
 
 
@@ -198,6 +203,10 @@ class LeadDraftRecord(Base):
     )
     model: Mapped[str | None] = mapped_column(String(100))
     prompt_version: Mapped[str | None] = mapped_column(String(32))
+    # M11 audit (migration 0006): who created and who decided. NULL means recorded
+    # before 0.9.0. Triggers check both are accounts and that neither ever changes.
+    created_by_id: Mapped[str | None] = mapped_column(String(36))
+    decided_by_id: Mapped[str | None] = mapped_column(String(36))
 
     def __repr__(self) -> str:
         # Never include the recipient, text or rejection reason.
@@ -273,6 +282,8 @@ class WorkflowRunRecord(Base):
     started_at: Mapped[datetime] = mapped_column(UTCDateTime())
     heartbeat_at: Mapped[datetime] = mapped_column(UTCDateTime())
     finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    # M11 audit: the account that started the run (NULL: started before 0.9.0).
+    started_by_id: Mapped[str | None] = mapped_column(String(36))
 
     def __repr__(self) -> str:
         return f"WorkflowRunRecord(id={self.id!r}, mode={self.mode!r}, status={self.status!r})"
@@ -325,3 +336,59 @@ class WorkflowRunItemRecord(Base):
 
     def __repr__(self) -> str:
         return f"WorkflowRunItemRecord(id={self.id!r}, outcome={self.outcome!r})"
+
+
+_ROLE_VALUES = ", ".join(f"'{role.value}'" for role in Role)
+
+
+class UserRecord(Base):
+    """An operator account (M11). Accounts are deactivated, never deleted.
+
+    ``password_hash`` is a salted scrypt hash (see ``leadflow_ai.accounts``); the
+    reserved ``system`` account (``SYSTEM_USER_ID``) is inactive and can never log in.
+    """
+
+    __tablename__ = "users"
+    __table_args__ = (
+        CheckConstraint(
+            "length(username) BETWEEN 3 AND 64 AND username = lower(username)"
+            " AND username NOT GLOB '*[^a-z0-9._-]*'",
+            name="username_format",
+        ),
+        CheckConstraint(f"role IN ({_ROLE_VALUES})", name="role_allowed"),
+        CheckConstraint("failed_logins >= 0", name="failed_logins_non_negative"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_id)
+    username: Mapped[str] = mapped_column(String(64), unique=True)
+    password_hash: Mapped[str] = mapped_column(String(255))
+    role: Mapped[str] = mapped_column(String(20))
+    is_active: Mapped[bool] = mapped_column(Boolean)
+    failed_logins: Mapped[int] = mapped_column(Integer, default=0)
+    locked_until: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=_utc_now)
+    password_changed_at: Mapped[datetime] = mapped_column(UTCDateTime())
+
+    def __repr__(self) -> str:
+        # Never include the password hash.
+        return f"UserRecord(id={self.id!r}, role={self.role!r})"
+
+
+class UserSessionRecord(Base):
+    """A login session (M11). Only the SHA-256 hash of the token is stored."""
+
+    __tablename__ = "user_sessions"
+    __table_args__ = (
+        CheckConstraint("length(token_hash) = 64", name="token_hash_length"),
+        CheckConstraint("expires_at > created_at", name="expires_after_creation"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_id)
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime())
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime())
+    revoked_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+
+    def __repr__(self) -> str:
+        return f"UserSessionRecord(id={self.id!r})"

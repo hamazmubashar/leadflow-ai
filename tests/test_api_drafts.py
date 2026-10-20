@@ -482,16 +482,52 @@ def test_database_at_0002_reports_not_migrated(
     alembic_config: Config, api_settings: Settings
 ) -> None:
     command.upgrade(alembic_config, "0002")
+    lead_id = str(uuid.uuid4())
+    with sqlite3.connect(api_settings.database_url.removeprefix("sqlite:///")) as db:
+        db.execute(
+            "INSERT INTO leads (id, full_name, email, source, created_at)"
+            " VALUES (?, 'A', 'a@example.com', 'web_form', '2026-10-15 09:00:00.000000')",
+            (lead_id,),
+        )
     with TestClient(create_app(api_settings)) as client:
-        lead_id = client.post(LEADS, json=AYESHA, headers=AUTH_HEADERS).json()["id"]
         for response in (
+            client.post(LEADS, json=AYESHA, headers=AUTH_HEADERS),  # new audit column (0006)
             client.post(
                 f"{LEADS}/{lead_id}/drafts", json={"template": "introduction"}, headers=AUTH_HEADERS
-            ),
+            ),  # no drafts table yet (0003)
             client.get(OUTBOX, headers=AUTH_HEADERS),
         ):
             assert response.status_code == 503
             assert response.json()["detail"]["code"] == "database.not_migrated"
+
+
+def test_database_one_migration_behind_reports_not_migrated(
+    alembic_config: Config, api_settings: Settings
+) -> None:
+    """New columns, not just new tables: writing or reading one is "not migrated" too."""
+    command.upgrade(alembic_config, "0005")
+    with TestClient(create_app(api_settings)) as client:
+        assert client.get(LEADS, headers=AUTH_HEADERS).status_code == 200  # unchanged table
+        lead_id = str(uuid.uuid4())
+        with sqlite3.connect(api_settings.database_url.removeprefix("sqlite:///")) as db:
+            db.execute(
+                "INSERT INTO leads (id, full_name, email, source, created_at)"
+                " VALUES (?, 'A', 'a@example.com', 'web_form', '2026-10-15 09:00:00.000000')",
+                (lead_id,),
+            )
+        for response in (
+            client.post(LEADS, json=AYESHA, headers=AUTH_HEADERS),  # "has no column named"
+            client.get(f"{LEADS}/{lead_id}/drafts", headers=AUTH_HEADERS),  # "no such column"
+        ):
+            assert response.status_code == 503, response.text
+            assert response.json() == {
+                "detail": {
+                    "code": "database.not_migrated",
+                    "message": "The database schema is missing; run: alembic upgrade head",
+                }
+            }
+            for leaked in ("actor_id", "created_by_id", "INSERT", "SELECT", "Ayesha"):
+                assert leaked not in response.text
 
 
 def test_outbox_items_survive_a_direct_delete_attempt(

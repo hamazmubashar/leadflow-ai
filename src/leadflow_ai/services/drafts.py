@@ -29,6 +29,7 @@ from sqlalchemy import CursorResult, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from leadflow_ai.accounts import SYSTEM_USER_ID
 from leadflow_ai.db.models import LeadDraftRecord, LeadRecord, OutboxMessageRecord
 from leadflow_ai.drafts import (
     CHANNEL_EMAIL,
@@ -152,13 +153,19 @@ def _unknown_fields(data: Mapping[str, object], allowed: tuple[str, ...]) -> lis
 # --- create ---------------------------------------------------------------------------------
 
 
-def create_draft(session: Session, lead: LeadRecord, template: DraftTemplate) -> LeadDraftRecord:
+def create_draft(
+    session: Session,
+    lead: LeadRecord,
+    template: DraftTemplate,
+    *,
+    actor_id: str = SYSTEM_USER_ID,
+) -> LeadDraftRecord:
     """Render ``template`` for ``lead`` and store it as a pending draft, in one commit.
 
     Raises LeadHasNoEmailError, LeadNotEligibleError or PendingDraftExistsError; on
     any failure nothing is written.
     """
-    draft = stage_pending_draft(session, lead, template)
+    draft = stage_pending_draft(session, lead, template, created_by_id=actor_id)
     try:
         session.commit()
     except IntegrityError as exc:
@@ -180,6 +187,7 @@ def stage_pending_draft(
     template: DraftTemplate,
     *,
     generated: GeneratedBody | None = None,
+    created_by_id: str = SYSTEM_USER_ID,
 ) -> LeadDraftRecord:
     """Add a pending draft to the session's transaction **without committing**.
 
@@ -230,6 +238,8 @@ def stage_pending_draft(
         ).value,
         model=None if generated is None else generated.model,
         prompt_version=None if generated is None else generated.prompt_version,
+        created_by_id=created_by_id,
+        decided_by_id=None,
     )
     session.add(draft)
     return draft
@@ -289,7 +299,7 @@ def list_outbox(
 
 
 def approve_draft(
-    session: Session, draft: LeadDraftRecord
+    session: Session, draft: LeadDraftRecord, *, actor_id: str = SYSTEM_USER_ID
 ) -> tuple[LeadDraftRecord, OutboxMessageRecord]:
     """Approve a pending draft and record its simulated outbox row, in one commit.
 
@@ -303,7 +313,7 @@ def approve_draft(
     draft_id, lead_id = draft.id, draft.lead_id
     now = datetime.now(UTC)
 
-    if not _mark_decided(session, draft_id, DraftStatus.APPROVED, now, None):
+    if not _mark_decided(session, draft_id, DraftStatus.APPROVED, now, None, actor_id):
         status = _stored_draft_status(session, draft_id)
         session.rollback()
         raise DraftAlreadyDecidedError(status)
@@ -328,14 +338,22 @@ def approve_draft(
     return draft, message
 
 
-def reject_draft(session: Session, draft: LeadDraftRecord, reason: str | None) -> LeadDraftRecord:
+def reject_draft(
+    session: Session,
+    draft: LeadDraftRecord,
+    reason: str | None,
+    *,
+    actor_id: str = SYSTEM_USER_ID,
+) -> LeadDraftRecord:
     """Reject a pending draft, in one commit. Lead eligibility is not checked, so a
     pending draft on a won or lost lead can always be cleared. Never writes to the outbox.
     """
     if draft.status != _PENDING:
         raise DraftAlreadyDecidedError(DraftStatus(draft.status))
     draft_id = draft.id
-    if not _mark_decided(session, draft_id, DraftStatus.REJECTED, datetime.now(UTC), reason):
+    if not _mark_decided(
+        session, draft_id, DraftStatus.REJECTED, datetime.now(UTC), reason, actor_id
+    ):
         status = _stored_draft_status(session, draft_id)
         session.rollback()
         raise DraftAlreadyDecidedError(status)
@@ -367,6 +385,7 @@ def _mark_decided(
     status: DraftStatus,
     decided_at: datetime,
     rejection_reason: str | None,
+    decided_by_id: str,
 ) -> bool:
     """Compare-and-set the draft from ``pending_review``; False if it was already decided."""
     result = cast(
@@ -374,7 +393,12 @@ def _mark_decided(
         session.execute(
             update(LeadDraftRecord)
             .where(LeadDraftRecord.id == draft_id, LeadDraftRecord.status == _PENDING)
-            .values(status=status.value, decided_at=decided_at, rejection_reason=rejection_reason)
+            .values(
+                status=status.value,
+                decided_at=decided_at,
+                rejection_reason=rejection_reason,
+                decided_by_id=decided_by_id,
+            )
             .execution_options(synchronize_session=False)
         ),
     )

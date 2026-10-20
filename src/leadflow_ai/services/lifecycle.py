@@ -16,6 +16,7 @@ from sqlalchemy import CursorResult, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from leadflow_ai.accounts import SYSTEM_USER_ID
 from leadflow_ai.db.models import EVENT_STATUS_CHANGED, LeadEventRecord, LeadRecord
 from leadflow_ai.leads import FieldError, LeadValidationError, NormalizationError, clean_text
 from leadflow_ai.lifecycle import LeadStatus, allowed_next, is_allowed
@@ -80,7 +81,11 @@ def parse_status_change(data: Mapping[str, object]) -> StatusChangeRequest:
 
 
 def change_status(
-    session: Session, lead: LeadRecord, request: StatusChangeRequest
+    session: Session,
+    lead: LeadRecord,
+    request: StatusChangeRequest,
+    *,
+    actor_id: str = SYSTEM_USER_ID,
 ) -> LeadEventRecord:
     """Move ``lead`` to ``request.status`` and record the event, in one commit."""
     current = LeadStatus(lead.status)
@@ -118,6 +123,7 @@ def change_status(
         to_status=request.status.value,
         note=request.note,
         occurred_at=datetime.now(UTC),
+        actor_id=actor_id,
     )
     session.add(event)
     try:

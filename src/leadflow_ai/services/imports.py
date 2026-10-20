@@ -15,6 +15,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from leadflow_ai.accounts import SYSTEM_USER_ID
 from leadflow_ai.db.models import LeadRecord, lead_created_event
 from leadflow_ai.imports.csv_reader import ParsedCsv
 from leadflow_ai.leads import Lead, LeadValidationError, validate_lead
@@ -65,7 +66,9 @@ class ImportResult:
         return len(self.lead_ids)
 
 
-def import_leads(session: Session, parsed: ParsedCsv) -> ImportResult:
+def import_leads(
+    session: Session, parsed: ParsedCsv, *, actor_id: str = SYSTEM_USER_ID
+) -> ImportResult:
     """Import every row of ``parsed`` or none of them.
 
     Raises ``ImportRejectedError`` (nothing written) if any row is malformed,
@@ -92,7 +95,7 @@ def import_leads(session: Session, parsed: ParsedCsv) -> ImportResult:
     session.add_all(records)
     try:
         session.flush()  # insert the leads first: their lead_created events reference them
-        session.add_all([lead_created_event(record) for record in records])
+        session.add_all([lead_created_event(record, actor_id) for record in records])
         session.commit()
     except IntegrityError:
         # A concurrent writer stored one of these contacts after our lookup.

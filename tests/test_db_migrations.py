@@ -25,6 +25,8 @@ ALL_TABLES = {
     "outbox_messages",
     "workflow_runs",
     "workflow_run_items",
+    "users",
+    "user_sessions",
 }
 
 
@@ -55,8 +57,9 @@ def _normalize_sql(sql: str) -> str:
 
 def test_single_linear_head(alembic_config: Config) -> None:
     script = ScriptDirectory.from_config(alembic_config)
-    assert script.get_heads() == ["0005"]
+    assert script.get_heads() == ["0006"]
     assert [rev.revision for rev in script.walk_revisions()] == [
+        "0006",
         "0005",
         "0004",
         "0003",
@@ -68,7 +71,7 @@ def test_single_linear_head(alembic_config: Config) -> None:
 def test_upgrade_downgrade_upgrade_cycle(alembic_config: Config, database_url: str) -> None:
     command.upgrade(alembic_config, "head")
     assert _tables(database_url) == ALL_TABLES
-    assert _current_revision(database_url) == "0005"
+    assert _current_revision(database_url) == "0006"
 
     command.downgrade(alembic_config, "base")
     assert _tables(database_url) == {"alembic_version"}
@@ -76,7 +79,7 @@ def test_upgrade_downgrade_upgrade_cycle(alembic_config: Config, database_url: s
 
     command.upgrade(alembic_config, "head")
     assert _tables(database_url) == ALL_TABLES
-    assert _current_revision(database_url) == "0005"
+    assert _current_revision(database_url) == "0006"
 
 
 def test_migrations_do_not_require_operator_token(
@@ -84,7 +87,7 @@ def test_migrations_do_not_require_operator_token(
 ) -> None:
     monkeypatch.delenv("LEADFLOW_OPERATOR_TOKEN", raising=False)
     command.upgrade(alembic_config, "head")
-    assert _current_revision(database_url) == "0005"
+    assert _current_revision(database_url) == "0006"
 
 
 def test_migrations_run_without_ini_file(database_url: str) -> None:
@@ -103,7 +106,7 @@ def test_migrations_run_without_ini_file(database_url: str) -> None:
         alembic_logger.setLevel(original_level)
 
     assert _tables(database_url) == ALL_TABLES
-    assert _current_revision(database_url) == "0005"
+    assert _current_revision(database_url) == "0006"
     command.downgrade(config, "base")
     assert _tables(database_url) == {"alembic_version"}
 
@@ -158,6 +161,8 @@ def test_migrated_constraint_names_and_rules_match_models(migrated_engine: Engin
         "outbox_messages",
         "workflow_runs",
         "workflow_run_items",
+        "users",
+        "user_sessions",
     ):
         migrated = {
             ck["name"]: _normalize_sql(ck["sqltext"])

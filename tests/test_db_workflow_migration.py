@@ -154,6 +154,7 @@ def test_columns_match_the_approved_schema(migrated_engine: Engine) -> None:
         "started_at": ("DATETIME", False),
         "heartbeat_at": ("DATETIME", False),
         "finished_at": ("DATETIME", True),
+        "started_by_id": ("VARCHAR(36)", True),  # 0006 (M11 audit)
     }
     assert columns("workflow_run_items") == {
         "id": ("VARCHAR(36)", False),
@@ -236,7 +237,10 @@ def test_triggers_exist(migrated_engine: Engine) -> None:
                 " AND tbl_name IN ('workflow_runs', 'workflow_run_items')"
             )
         ).scalars()
-        assert set(names) == TRIGGERS
+        assert set(names) == TRIGGERS | {
+            "trg_workflow_runs_starter_valid",  # 0006 (M11 audit)
+            "trg_workflow_runs_starter_immutable",
+        }
 
 
 # --- runs ------------------------------------------------------------------------------------

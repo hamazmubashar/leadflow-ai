@@ -15,6 +15,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from leadflow_ai.accounts import SYSTEM_USER_ID
 from leadflow_ai.db.models import LeadRecord, lead_created_event
 from leadflow_ai.leads import Lead, validate_lead
 
@@ -47,7 +48,9 @@ class DuplicateLeadError(Exception):
         super().__init__(f"Lead identity already exists ({fields})")
 
 
-def create_lead(session: Session, data: Mapping[str, object]) -> LeadRecord:
+def create_lead(
+    session: Session, data: Mapping[str, object], *, actor_id: str = SYSTEM_USER_ID
+) -> LeadRecord:
     """Validate ``data``, store it as a new lead and commit.
 
     Raises ``LeadValidationError`` (before touching the database) for invalid
@@ -71,7 +74,7 @@ def create_lead(session: Session, data: Mapping[str, object]) -> LeadRecord:
     session.add(record)
     try:
         session.flush()  # insert the lead first: its lead_created event references it
-        session.add(lead_created_event(record))
+        session.add(lead_created_event(record, actor_id))
         session.commit()
     except IntegrityError:
         # Another writer stored the same identity after our lookup. The UNIQUE

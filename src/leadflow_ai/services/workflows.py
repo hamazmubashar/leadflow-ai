@@ -35,6 +35,7 @@ from sqlalchemy import CursorResult, exists, func, select, update
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
+from leadflow_ai.accounts import SYSTEM_USER_ID
 from leadflow_ai.db.models import (
     LeadDraftRecord,
     LeadRecord,
@@ -151,6 +152,7 @@ def run_workflow(
     mode: RunMode,
     *,
     max_leads: int = MAX_LEADS_PER_RUN,
+    started_by_id: str = SYSTEM_USER_ID,
 ) -> WorkflowRunRecord:
     """Run the new-lead outreach workflow now and return the finished run.
 
@@ -161,7 +163,7 @@ def run_workflow(
     """
     if isinstance(max_leads, bool) or not 1 <= max_leads <= MAX_LEADS_PER_RUN:
         raise ValueError(f"max_leads must be between 1 and {MAX_LEADS_PER_RUN}")
-    run, lead_ids = _begin(session, rules, mode, max_leads)
+    run, lead_ids = _begin(session, rules, mode, max_leads, started_by_id)
     for lead_id in lead_ids:
         try:
             keep_going = _process_lead(session, run, lead_id, rules, mode)
@@ -176,7 +178,7 @@ def run_workflow(
 
 
 def _begin(
-    session: Session, rules: ScoringRules, mode: RunMode, max_leads: int
+    session: Session, rules: ScoringRules, mode: RunMode, max_leads: int, started_by_id: str
 ) -> tuple[WorkflowRunRecord, list[str]]:
     """Mark stale runs interrupted, select the leads and store the new run, in one commit."""
     now = _utc_now()
@@ -217,6 +219,7 @@ def _begin(
         started_at=now,
         heartbeat_at=now,
         finished_at=None,
+        started_by_id=started_by_id,
     )
     session.add(run)
     try:
@@ -273,7 +276,9 @@ def _process_lead(
             session.add(_item(run, lead_id, outcome, reason, score))
         else:
             try:
-                draft = stage_pending_draft(session, lead, DRAFT_TEMPLATE)
+                draft = stage_pending_draft(
+                    session, lead, DRAFT_TEMPLATE, created_by_id=run.started_by_id or SYSTEM_USER_ID
+                )
             except PendingDraftExistsError:  # already rolled back
                 return _record(
                     session,

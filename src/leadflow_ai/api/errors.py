@@ -150,7 +150,7 @@ async def _database_unavailable(request: Request, exc: Exception) -> JSONRespons
                     "message": "The database file cannot be opened; check LEADFLOW_DATABASE_URL",
                 },
             )
-        if str(original).startswith("no such table:"):
+        if _schema_out_of_date(str(original)):
             return _error(
                 503,
                 {
@@ -161,6 +161,17 @@ async def _database_unavailable(request: Request, exc: Exception) -> JSONRespons
     # Anything else is unexpected: let it surface as a plain 500. Bound
     # parameters are already hidden by the engine (hide_parameters=True).
     raise exc
+
+
+def _schema_out_of_date(message: str) -> bool:
+    """A table or column the code needs doesn't exist: the database is behind the code.
+
+    ``no such table`` (a new table), ``no such column`` (a new column read) and
+    ``... has no column named ...`` (a new column written).
+    """
+    return message.startswith(("no such table:", "no such column:")) or (
+        " has no column named " in message
+    )
 
 
 async def _invalid_transition(request: Request, exc: Exception) -> JSONResponse:
