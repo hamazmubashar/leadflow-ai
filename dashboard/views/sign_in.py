@@ -98,6 +98,8 @@ _CSS = f"""
     border-color: {ORANGE}; box-shadow: 0 0 0 3px rgba(255, 116, 23, 0.30);
   }}
   [data-testid="stForm"] [data-testid="stTextInput"] {{ margin-bottom: 0.35rem; }}
+  [data-testid="stFormSubmitButton"], .stFormSubmitButton,
+  [data-testid="stFormSubmitButton"] > div {{ width: 100%; }}
   [data-testid="stFormSubmitButton"] button {{
     width: 100%; min-height: 52px; margin-top: 0.75rem; border-radius: 12px; border: 0;
     background: {ORANGE}; color: #FFFFFF; font-weight: 700; font-size: 1.02rem;
