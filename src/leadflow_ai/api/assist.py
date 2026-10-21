@@ -53,7 +53,9 @@ LockDep = Annotated[threading.Lock, Depends(get_generation_lock)]
 
 
 @router.get(STATUS_PATH, response_model=AssistStatusOut, summary="Are AI-assisted drafts enabled?")
-def status(generator: GeneratorDep) -> AssistStatusOut:
+def status(generator: GeneratorDep, principal: AuthorizedUser) -> AssistStatusOut:
+    if principal.is_demo:  # M12: no AI drafts in the public demo
+        return AssistStatusOut(enabled=False, model=None)
     return AssistStatusOut(
         enabled=generator is not None, model=None if generator is None else generator.model
     )
@@ -97,7 +99,7 @@ def create_ai(
         raise HTTPException(
             status_code=404, detail={"code": "lead.not_found", "message": "Lead not found"}
         )
-    if generator is None:
+    if generator is None or principal.is_demo:
         raise GenerationError(GenerationErrorCode.DISABLED)
     if not lock.acquire(blocking=False):
         raise GenerationError(GenerationErrorCode.BUSY)

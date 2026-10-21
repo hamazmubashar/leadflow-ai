@@ -47,10 +47,15 @@ class Principal:
     user_id: str
     username: str
     role: Role
+    sandbox_id: str | None = None  # M12: set for a demo visitor, inside their sandbox
 
     @property
     def is_admin(self) -> bool:
         return self.role is Role.ADMIN
+
+    @property
+    def is_demo(self) -> bool:
+        return self.sandbox_id is not None
 
 
 SYSTEM = Principal(SYSTEM_USER_ID, SYSTEM_USERNAME, Role.ADMIN)

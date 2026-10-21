@@ -10,6 +10,14 @@ from sqlalchemy.exc import OperationalError
 
 from leadflow_ai.api.login_limit import LoginRateLimitedError, SignInLockedError
 from leadflow_ai.assist import GenerationError, GenerationErrorCode
+from leadflow_ai.demo.sandboxes import (
+    FULL_RETRY_SECONDS,
+    MAX_DEMO_IMPORT_ROWS,
+    MAX_DEMO_LEADS,
+    DemoFullError,
+    DemoLimitError,
+    DemoRateLimitedError,
+)
 from leadflow_ai.drafts import ELIGIBLE_LEAD_STATUSES
 from leadflow_ai.imports.csv_reader import CsvFileError
 from leadflow_ai.leads import LeadValidationError
@@ -202,6 +210,42 @@ async def _sign_in_locked(request: Request, exc: Exception) -> JSONResponse:
     )
 
 
+async def _demo_full(request: Request, exc: Exception) -> JSONResponse:
+    return _error(
+        503,
+        {
+            "code": "demo.full",
+            "message": "All demo slots are in use. Please try again in a minute.",
+            "retry_after_seconds": FULL_RETRY_SECONDS,
+        },
+        **{"Retry-After": str(FULL_RETRY_SECONDS)},
+    )
+
+
+async def _demo_rate_limited(request: Request, exc: Exception) -> JSONResponse:
+    retry_after = cast(DemoRateLimitedError, exc).retry_after_seconds
+    return _error(
+        429,
+        {
+            "code": "demo.rate_limited",
+            "message": "Too many demo sessions from this address; try again later",
+            "retry_after_seconds": retry_after,
+        },
+        **{"Retry-After": str(retry_after)},
+    )
+
+
+async def _demo_limit(request: Request, exc: Exception) -> JSONResponse:
+    return _error(
+        422,
+        {
+            "code": "demo.limit",
+            "message": f"The demo holds at most {MAX_DEMO_LEADS} leads and imports at most"
+            f" {MAX_DEMO_IMPORT_ROWS} rows at a time. Nothing was saved.",
+        },
+    )
+
+
 async def _invalid_transition(request: Request, exc: Exception) -> JSONResponse:
     error = cast(InvalidTransitionError, exc)
     return _error(
@@ -332,4 +376,7 @@ def register_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(GenerationError, _generation_failed)
     app.add_exception_handler(LoginRateLimitedError, _login_rate_limited)
     app.add_exception_handler(SignInLockedError, _sign_in_locked)
+    app.add_exception_handler(DemoFullError, _demo_full)
+    app.add_exception_handler(DemoRateLimitedError, _demo_rate_limited)
+    app.add_exception_handler(DemoLimitError, _demo_limit)
     app.add_exception_handler(OperationalError, _database_unavailable)

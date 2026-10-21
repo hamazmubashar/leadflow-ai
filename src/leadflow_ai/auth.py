@@ -2,7 +2,8 @@
 
 One rule, applied centrally by the routers (``dependencies=[Depends(authorize)]``):
 
-1. **Who is calling** (``authenticate``). The bearer token is either the optional
+1. **Who is calling** (``authenticate``). The bearer token is a demo sandbox token
+   (M12; the visitor acts as an admin inside their own sandbox only), the optional
    service key (``LEADFLOW_OPERATOR_TOKEN``, compared in constant time; acts as the
    ``system`` account) or a login session token (looked up by its SHA-256 hash).
    Anything else is ``401``. With no service key configured, only logins work.
@@ -17,8 +18,8 @@ import hmac
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, Request, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from leadflow_ai.api.caller import BearerCredentials, SandboxDep
 from leadflow_ai.api.db_session import SessionDep
 from leadflow_ai.config import Settings, get_settings
 from leadflow_ai.services.accounts import SYSTEM, Principal, resolve_session
@@ -26,9 +27,16 @@ from leadflow_ai.services.accounts import SYSTEM, Principal, resolve_session
 READ_ONLY_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 UNAUTHORIZED_DETAIL = "Invalid or missing bearer token"
 
-_bearer_scheme = HTTPBearer(auto_error=False)
-
-BearerCredentials = Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer_scheme)]
+__all__ = [
+    "READ_ONLY_METHODS",
+    "UNAUTHORIZED_DETAIL",
+    "AuthorizedUser",
+    "BearerCredentials",
+    "CurrentUser",
+    "authenticate",
+    "authorize",
+    "is_service_key",
+]
 
 
 def _unauthorized() -> HTTPException:
@@ -61,10 +69,13 @@ def authenticate(
     credentials: BearerCredentials,
     settings: Annotated[Settings, Depends(get_settings)],
     session: SessionDep,
+    sandbox: SandboxDep,
 ) -> Principal:
     """The caller behind the bearer token, or 401. Any role; no method check."""
     if credentials is None:
         raise _unauthorized()
+    if sandbox is not None:
+        return sandbox.principal
     token = credentials.credentials
     if is_service_key(token, settings):
         return SYSTEM

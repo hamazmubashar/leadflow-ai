@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict
 from leadflow_ai.api.deps import CsvBody, JsonObjectBody, ScoringRulesDep, SessionDep
 from leadflow_ai.auth import AuthorizedUser, authorize
 from leadflow_ai.db.models import LeadEventRecord
+from leadflow_ai.demo.sandboxes import MAX_DEMO_IMPORT_ROWS, DemoLimitError, check_demo_lead_quota
 from leadflow_ai.imports.csv_reader import read_leads_csv
 from leadflow_ai.leads import LeadSource
 from leadflow_ai.lifecycle import LeadStatus
@@ -138,6 +139,8 @@ _LEAD_INPUT_SCHEMA = {
 def create(
     payload: JsonObjectBody, session: SessionDep, response: Response, principal: AuthorizedUser
 ) -> LeadOut:
+    if principal.is_demo:
+        check_demo_lead_quota(session, 1)
     record = create_lead(session, payload, actor_id=principal.user_id)
     response.headers["Location"] = f"{PREFIX}/{record.id}"
     return LeadOut.model_validate(record)
@@ -178,7 +181,12 @@ def retrieve(lead_id: str, session: SessionDep) -> LeadOut:
     },
 )
 def import_csv(body: CsvBody, session: SessionDep, principal: AuthorizedUser) -> ImportOut:
-    result = import_leads(session, read_leads_csv(body), actor_id=principal.user_id)
+    parsed = read_leads_csv(body)
+    if principal.is_demo:
+        if len(parsed.rows) > MAX_DEMO_IMPORT_ROWS:
+            raise DemoLimitError
+        check_demo_lead_quota(session, len(parsed.rows))
+    result = import_leads(session, parsed, actor_id=principal.user_id)
     return ImportOut(imported=result.imported, lead_ids=list(result.lead_ids))
 
 

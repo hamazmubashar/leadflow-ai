@@ -165,10 +165,17 @@ def sign_in(
     status_code=status.HTTP_204_NO_CONTENT,
     summary="End the current session (the token stops working at once)",
 )
-def sign_out(_: CurrentUser, credentials: BearerCredentials, session: SessionDep) -> Response:
+def sign_out(
+    request: Request, principal: CurrentUser, credentials: BearerCredentials, session: SessionDep
+) -> Response:
     # CurrentUser has already rejected a missing or invalid token, so credentials are
-    # present. The service key has no session to end: for it this is a no-op.
-    logout(session, cast(HTTPAuthorizationCredentials, credentials).credentials)
+    # present. The service key has no session to end: for it this is a no-op. A demo
+    # visitor's sign-out deletes their sandbox (M12).
+    token = cast(HTTPAuthorizationCredentials, credentials).credentials
+    if principal.is_demo:
+        request.app.state.sandboxes.end(token)
+    else:
+        logout(session, token)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

@@ -78,6 +78,15 @@ class Settings(DatabaseSettings):
         description="Optional local Ollama URL, e.g. http://127.0.0.1:11434 (unset = disabled).",
     )
     llm_model: str = Field(default=DEFAULT_LLM_MODEL, description="Local model name.")
+
+    # M12: the public demo. Each visitor gets a private, disposable copy of a fictional
+    # dataset. Off unless enabled; never touches the main database.
+    demo_enabled: bool = Field(default=False, description="Offer no-password demo sandboxes.")
+    demo_dir: Path = Field(
+        default=Path("./demo-sandboxes"), description="Folder for sandbox databases (wiped)."
+    )
+    demo_max_sandboxes: int = Field(default=30, ge=1, le=500)
+    demo_lifetime_minutes: int = Field(default=120, ge=5, le=480)
     llm_timeout_seconds: float = Field(
         default=120.0, ge=5.0, le=300.0, description="Seconds to wait for one generation."
     )

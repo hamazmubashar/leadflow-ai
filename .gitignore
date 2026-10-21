@@ -40,3 +40,6 @@ htmlcov/
 .idea/
 .vscode/
 .DS_Store
+
+# M12 demo sandboxes (disposable copies of the fictional demo data)
+demo-sandboxes/

@@ -23,10 +23,20 @@ class ForeignKeyViolationError(RuntimeError):
     """A migration left rows whose foreign keys point nowhere; it was rolled back."""
 
 
+def _settings() -> DatabaseSettings:
+    """``LEADFLOW_DATABASE_URL``, unless the caller passed a URL in ``config.attributes``.
+
+    The demo sandbox (M12) builds its template database this way, without touching the
+    process environment.
+    """
+    url = config.attributes.get("database_url")
+    return DatabaseSettings(database_url=url) if isinstance(url, str) else DatabaseSettings()
+
+
 def run_migrations_offline() -> None:
     """Emit SQL to stdout (``alembic upgrade head --sql``) without connecting."""
     context.configure(
-        url=DatabaseSettings().database_url,
+        url=_settings().database_url,
         target_metadata=target_metadata,
         literal_binds=True,
         render_as_batch=True,
@@ -63,7 +73,7 @@ def _make_ddl_transactional(engine: Engine) -> None:
 
 def run_migrations_online() -> None:
     """Apply migrations to the database named by ``LEADFLOW_DATABASE_URL``."""
-    engine = create_db_engine(DatabaseSettings())
+    engine = create_db_engine(_settings())
     _make_ddl_transactional(engine)
     try:
         with engine.connect() as connection:
