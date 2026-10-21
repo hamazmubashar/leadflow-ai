@@ -119,6 +119,20 @@ class LoginResult(_ApiModel):
     user: UserInfo
 
 
+class DemoInfo(_ApiModel):
+    """``GET /api/v1/demo`` (M12): present only when the public demo is enabled."""
+
+    lifetime_minutes: int
+    max_leads: int
+    max_import_rows: int
+
+
+class DemoStart(LoginResult):
+    """``POST /api/v1/demo/sessions``: a token for a private, disposable sandbox."""
+
+    demo: bool
+
+
 class AssistStatus(_ApiModel):
     """``GET /api/v1/assist/status``: whether AI-assisted drafts are configured (M9)."""
 

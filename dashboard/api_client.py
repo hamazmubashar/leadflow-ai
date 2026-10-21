@@ -20,6 +20,8 @@ from dashboard.models import (
     Activity,
     Approval,
     AssistStatus,
+    DemoInfo,
+    DemoStart,
     Draft,
     DraftPage,
     DraftTemplate,
@@ -46,6 +48,8 @@ ASSIST_STATUS_PATH = "/api/v1/assist/status"
 LOGIN_PATH = "/api/v1/auth/login"
 LOGOUT_PATH = "/api/v1/auth/logout"
 ME_PATH = "/api/v1/auth/me"
+DEMO_PATH = "/api/v1/demo"
+DEMO_SESSIONS_PATH = "/api/v1/demo/sessions"
 NOT_SIGNED_IN = "You are not signed in."
 SESSION_REJECTED = (
     "Your session has ended (signed out, older than 8 hours, or the password or account "
@@ -203,6 +207,20 @@ class ApiClient:
                 ) from None
             raise
         return _validate(LoginResult, body)
+
+    def demo_info(self) -> DemoInfo | None:
+        """``GET /api/v1/demo`` (no token): the demo's limits, or None if it is off."""
+        try:
+            body = self._request("GET", DEMO_PATH, auth=False)
+        except ApiError as error:
+            if error.status_code == 404:
+                return None
+            raise
+        return _validate(DemoInfo, body)
+
+    def start_demo(self) -> DemoStart:
+        """``POST /api/v1/demo/sessions`` (no token): a private sandbox. Never retried."""
+        return _validate(DemoStart, self._request("POST", DEMO_SESSIONS_PATH, auth=False))
 
     def logout(self) -> None:
         """``POST /api/v1/auth/logout``: the token stops working at once."""

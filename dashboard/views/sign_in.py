@@ -22,7 +22,8 @@ import streamlit as st
 from dashboard import session
 from dashboard.api_client import ApiError
 from dashboard.config import ConfigError
-from dashboard.runtime import sign_in
+from dashboard.models import DemoInfo
+from dashboard.runtime import demo_info, sign_in, start_demo
 
 PAGE_BG = "#08172C"
 CARD_BG = "#0C2038"
@@ -128,6 +129,24 @@ _CSS = f"""
   .lf-foot {{ color: {MUTED}; font-size: 0.85rem; text-align: center; max-width: 480px;
     margin: 1.25rem 0 0 auto; }}
 
+  /* public demo (M12) */
+  .lf-or {{ display: flex; align-items: center; gap: 0.9rem; max-width: 480px;
+    margin: 1.5rem 0 1rem auto; color: {MUTED}; font-size: 0.85rem; }}
+  .lf-or::before, .lf-or::after {{ content: ""; flex: 1; height: 1px; background: {LINE}; }}
+  [data-testid="stButton"] {{ max-width: 480px; margin-left: auto; }}
+  [data-testid="stButton"] button {{
+    width: 100%; min-height: 52px; border-radius: 12px; background: transparent;
+    border: 1px solid rgba(255, 116, 23, 0.65); color: {TEXT}; font-weight: 600;
+  }}
+  [data-testid="stButton"] button:hover {{ border-color: {ORANGE}; color: {ORANGE};
+    background: rgba(255, 116, 23, 0.08); }}
+  [data-testid="stButton"] button:focus-visible {{
+    outline: 3px solid rgba(255, 116, 23, 0.60); outline-offset: 3px;
+  }}
+  .lf-demo-note {{ color: {MUTED}; font-size: 0.88rem; line-height: 1.55; max-width: 480px;
+    margin: 0.6rem 0 0 auto; }}
+  .lf-demo-note b {{ color: {TEXT}; font-weight: 600; }}
+
   @media (max-width: 900px) {{
     [data-testid="stMainBlockContainer"] {{ padding: 2rem 1.25rem; }}
     .lf-brand-panel {{ padding: 0; }}
@@ -135,7 +154,8 @@ _CSS = f"""
     .lf-headline {{ font-size: 2rem; }}
     .lf-lede {{ font-size: 1rem; margin-bottom: 1.25rem; }}
     .lf-benefits, .lf-pipeline {{ display: none; }}
-    [data-testid="stForm"], .lf-alert, .lf-foot {{ max-width: none; margin-left: 0; }}
+    [data-testid="stForm"], .lf-alert, .lf-foot, .lf-or, .lf-demo-note,
+    [data-testid="stButton"] {{ max-width: none; margin-left: 0; }}
     [data-testid="stForm"] {{ padding: 1.75rem 1.25rem 1.5rem; }}
   }}
 </style>
@@ -266,9 +286,12 @@ def render() -> None:
                 disabled=locked_for is not None,
             )
             submitted = st.form_submit_button(
-                "Sign in", type="primary", disabled=locked_for is not None
+                "Sign in", type="primary", disabled=locked_for is not None, width="stretch"
             )
         feedback = st.container()
+        info = demo_info()
+        if info is not None:
+            _demo_offer(info)
         st.markdown(
             '<div class="lf-foot">Sessions last 8 hours · Refreshing the page signs you out</div>',
             unsafe_allow_html=True,
@@ -282,6 +305,37 @@ def render() -> None:
             _alert("info", notice)
         if submitted:
             _submit(username, password)
+
+
+def _demo_offer(info: DemoInfo) -> None:
+    """The no-account demo (M12): a private copy of fictional data, deleted afterwards."""
+    st.markdown('<div class="lf-or">or</div>', unsafe_allow_html=True)
+    clicked = st.button(
+        "Explore the live demo", icon=":material/rocket_launch:", key="demo.start", width="stretch"
+    )
+    st.markdown(
+        '<div class="lf-demo-note">No account needed. You get a private copy of sample data for '
+        "<b>Harborline Home &amp; Living</b>, a fictional home-goods supplier. Change anything "
+        f"you like: it is all deleted after {html.escape(_duration(info.lifetime_minutes))} or "
+        "when you end the demo.</div>",
+        unsafe_allow_html=True,
+    )
+    if not clicked:
+        return
+    try:
+        with st.spinner("Preparing your private demo…"):
+            start_demo()
+    except ApiError as error:
+        _alert("error", error.message)
+        return
+    st.rerun()
+
+
+def _duration(minutes: int) -> str:
+    if minutes % 60 == 0:
+        hours = minutes // 60
+        return f"{hours} hour" + ("" if hours == 1 else "s")
+    return f"{minutes} minutes"
 
 
 @st.fragment(run_every=1.0)

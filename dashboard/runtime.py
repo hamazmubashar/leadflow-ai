@@ -11,6 +11,7 @@ from dashboard import session
 from dashboard.api_client import NOT_SIGNED_IN, ApiClient, ApiError, ApiErrorKind
 from dashboard.config import ConfigError, load_settings
 from dashboard.leads import LeadSnapshot, fetch_lead_snapshot
+from dashboard.models import DemoInfo
 from dashboard.ui import escape_markdown
 
 READ_ONLY_HELP = "Your account can view data but not change it."
@@ -50,19 +51,49 @@ def sign_in(username: str, password: str) -> None:
     )
 
 
+def start_demo() -> None:
+    """Open a private demo sandbox in this tab (M12), or raise ``ApiError``."""
+    result = get_client().start_demo()
+    session.begin(
+        st.session_state,
+        session.SignedIn(
+            token=SecretStr(result.token),
+            username=result.user.username,
+            role=result.user.role,
+            expires_at=result.expires_at,
+            demo=True,
+        ),
+    )
+    clear_lead_data()
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def demo_info() -> DemoInfo | None:
+    """The public demo's limits, or None when it is off or the API can't be reached."""
+    try:
+        return get_client().demo_info()
+    except (ApiError, ConfigError):
+        return None
+
+
 def sign_out() -> None:
-    """End the session on the API (best effort) and forget the token in this tab."""
+    """End the session on the API (best effort) and forget the token in this tab.
+
+    For a demo this deletes the sandbox and everything changed in it.
+    """
     user = current_user()
     if user is not None:
         # Best effort: the token is forgotten either way, and expires on its own.
         with contextlib.suppress(ApiError):
             get_client().with_token(user.token).logout()
-    session.end(st.session_state, session.SIGNED_OUT)
+    demo = user is not None and user.demo
+    session.end(st.session_state, session.DEMO_SIGNED_OUT if demo else session.SIGNED_OUT)
     clear_lead_data()
 
 
 def _session_ended() -> None:
-    session.end(st.session_state, session.SESSION_ENDED)
+    user = session.current(st.session_state)
+    session.end(st.session_state, user.ended_notice if user else session.SESSION_ENDED)
 
 
 def _signed_in_client() -> ApiClient:
@@ -112,17 +143,24 @@ def require_client() -> ApiClient:
         st.rerun()
 
 
-@st.cache_data(ttl=60, show_spinner=False)
 def lead_snapshot() -> LeadSnapshot:
-    """Every lead with its status and score, cached for 60 s.
+    """Every lead with its status and score, cached for 60 s per data source.
 
     Call ``clear_lead_data()`` after any change so the next read comes from the API.
-    A failed load raises ``ApiError`` and is not cached. The cache is shared by every
-    signed-in tab of this dashboard process: both roles may read all leads, and only
-    signed-in tabs ever render it.
+    A failed load raises ``ApiError`` and is not cached.
     """
+    user = current_user()
+    return _cached_snapshot(session.data_scope(user) if user else "none")
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _cached_snapshot(scope: str) -> LeadSnapshot:
+    # ``scope`` is part of Streamlit's cache key: the main database is shared by every
+    # signed-in account (all may read all leads), but each demo sandbox has its own key,
+    # so no visitor ever sees another visitor's data or the real data.
+    del scope
     return fetch_lead_snapshot(_signed_in_client())
 
 
 def clear_lead_data() -> None:
-    lead_snapshot.clear()
+    _cached_snapshot.clear()

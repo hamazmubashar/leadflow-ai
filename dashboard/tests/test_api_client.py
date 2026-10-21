@@ -689,3 +689,43 @@ def test_with_token_shares_the_connection_pool() -> None:
     signed_in.me()
     assert session.calls[0]["headers"]["Authorization"] == "Bearer other-" + "t" * 30
     assert signed_in.base_url == anonymous.base_url
+
+
+# --- public demo (M12) -------------------------------------------------------------------------
+
+
+def test_demo_info_without_a_token() -> None:
+    client, session = client_for(
+        respond(200, {"lifetime_minutes": 120, "max_leads": 300, "max_import_rows": 100})
+    )
+    info = client.demo_info()
+    assert info is not None and info.lifetime_minutes == 120
+    assert session.calls[0]["url"] == f"{BASE}/api/v1/demo"
+    assert "Authorization" not in session.calls[0]["headers"]
+
+
+def test_demo_info_is_none_when_the_demo_is_off() -> None:
+    client, _ = client_for(respond(404, {"detail": "Not Found"}))
+    assert client.demo_info() is None
+
+
+def test_demo_info_other_errors_pass_through() -> None:
+    client, _ = client_for(requests.ConnectionError("down"))
+    assert raised(client.demo_info).is_transport_failure
+
+
+def test_start_demo_sends_no_token_and_marks_the_session() -> None:
+    client, session = client_for(respond(201, {**LOGIN_BODY, "demo": True}))
+    started = client.start_demo()
+    assert started.demo is True
+    assert started.user.username == "hamaz"
+    call = session.calls[0]
+    assert (call["method"], call["url"]) == ("POST", f"{BASE}/api/v1/demo/sessions")
+    assert "Authorization" not in call["headers"]
+
+
+def test_a_full_demo_shows_the_api_message() -> None:
+    detail = {"code": "demo.full", "message": "All demo slots are in use."}
+    client, _ = client_for(respond(503, {"detail": detail}))
+    error = raised(client.start_demo)
+    assert (error.code, error.message) == ("demo.full", "All demo slots are in use.")

@@ -5,6 +5,7 @@ to disk, a cookie, the URL or a log. Refreshing the page starts a new tab sessio
 it signs the person out (accepted for now; the API session simply expires).
 """
 
+import hashlib
 from collections.abc import MutableMapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -18,6 +19,8 @@ AUTH_KEY = "auth.signed_in"
 NOTICE_KEY = "auth.notice"
 SESSION_ENDED = "Your session has ended. Please sign in again."
 SIGNED_OUT = "You have signed out."
+DEMO_ENDED = "Your demo has ended and its data was deleted."
+DEMO_SIGNED_OUT = "Demo ended. Everything you changed was deleted."
 
 State = MutableMapping[Any, Any]  # st.session_state, or a dict in tests
 
@@ -28,6 +31,11 @@ class SignedIn:
     username: str
     role: Role
     expires_at: datetime
+    demo: bool = False  # M12: a private, disposable demo sandbox, not an account
+
+    @property
+    def ended_notice(self) -> str:
+        return DEMO_ENDED if self.demo else SESSION_ENDED
 
     @property
     def can_write(self) -> bool:
@@ -40,9 +48,20 @@ def current(state: State, *, now: datetime | None = None) -> SignedIn | None:
     if not isinstance(signed_in, SignedIn):
         return None
     if signed_in.expires_at <= (now or datetime.now(UTC)):
-        end(state, SESSION_ENDED)
+        end(state, signed_in.ended_notice)
         return None
     return signed_in
+
+
+def data_scope(signed_in: SignedIn) -> str:
+    """Which data a tab sees, for cache keys: ``main``, or one id per demo sandbox.
+
+    The sandbox id is a SHA-256 of the token, so the token itself is never a cache key.
+    """
+    if not signed_in.demo:
+        return "main"
+    digest = hashlib.sha256(signed_in.token.get_secret_value().encode()).hexdigest()
+    return f"demo:{digest}"
 
 
 def begin(state: State, signed_in: SignedIn) -> None:

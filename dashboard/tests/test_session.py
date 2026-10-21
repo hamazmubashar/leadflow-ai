@@ -98,3 +98,35 @@ def test_countdown_format() -> None:
         "0:00",
         "0:00",
     ]
+
+
+# --- demo sessions (M12) ----------------------------------------------------------------------
+
+
+def test_accounts_are_not_demos_by_default() -> None:
+    assert signed_in().demo is False
+    assert signed_in().ended_notice == session.SESSION_ENDED
+
+
+def test_an_expired_demo_says_its_data_was_deleted() -> None:
+    state: dict[str, Any] = {}
+    demo = session.SignedIn(
+        token=SecretStr("demo-token-" + "d" * 30),
+        username="demo-visitor",
+        role=Role.ADMIN,
+        expires_at=NOW + timedelta(hours=2),
+        demo=True,
+    )
+    session.begin(state, demo)
+    assert session.current(state, now=NOW + timedelta(hours=2)) is None
+    assert session.take_notice(state) == session.DEMO_ENDED
+
+
+def test_each_demo_has_its_own_data_scope() -> None:
+    def demo(token: str) -> session.SignedIn:
+        return session.SignedIn(SecretStr(token), "demo-visitor", Role.ADMIN, NOW, demo=True)
+
+    first, second = session.data_scope(demo("a" * 43)), session.data_scope(demo("b" * 43))
+    assert first != second
+    assert first.startswith("demo:") and "a" * 43 not in first  # the token is not the key
+    assert session.data_scope(signed_in()) == session.data_scope(signed_in(Role.VIEWER)) == "main"

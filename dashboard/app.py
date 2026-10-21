@@ -6,6 +6,7 @@ Run from the project root, with the API running:
 """
 
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 # `streamlit run` puts only this file's folder on sys.path; add the project root so
@@ -110,16 +111,28 @@ with st.sidebar:
     for page in pages.values():
         st.page_link(page)
     st.divider()
-    role_tone = ui.Tone.SUCCESS if user.can_write else ui.Tone.NEUTRAL
-    st.markdown(
-        f"{ui.escape_markdown(user.username)} &nbsp;{ui.pill(user.role.value, role_tone)}",
-        unsafe_allow_html=True,
-    )
-    if st.button("Sign out", icon=":material/logout:", width="stretch", key="auth.sign_out"):
+    if user.demo:
+        st.markdown(f"Demo visitor &nbsp;{ui.pill('demo', ui.Tone.ACCENT)}", unsafe_allow_html=True)
+    else:
+        role_tone = ui.Tone.SUCCESS if user.can_write else ui.Tone.NEUTRAL
+        st.markdown(
+            f"{ui.escape_markdown(user.username)} &nbsp;{ui.pill(user.role.value, role_tone)}",
+            unsafe_allow_html=True,
+        )
+    label = "End demo" if user.demo else "Sign out"
+    if st.button(label, icon=":material/logout:", width="stretch", key="auth.sign_out"):
         sign_out()
         st.rerun()
 
-if not user.can_write:
+if user.demo:
+    minutes_left = max(1, int((user.expires_at - datetime.now(UTC)).total_seconds() // 60))
+    st.info(
+        "You're exploring a **private demo** with fictional data for Harborline Home & Living. "
+        f"Change anything you like: it is all deleted in about {minutes_left} minutes, or when "
+        "you click **End demo**.",
+        icon=":material/science:",
+    )
+elif not user.can_write:
     st.info(f"Read-only access. {READ_ONLY_HELP}", icon=":material/visibility:")
 
 navigation.run()
