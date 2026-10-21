@@ -736,7 +736,8 @@ router = APIRouter(prefix="/api/v1/things", dependencies=[Depends(authorize)])
 
 @router.post("")
 def create(principal: AuthorizedUser) -> dict[str, str]:
-    ...  # pass principal.user_id to the service as the actor
+    # Pass principal.user_id to the service, so the change is recorded as theirs.
+    return {"created_by": principal.user_id}
 ```
 
 The route audit test (`tests/test_api_leads.py`) fails until a new router is listed there, and `tests/test_api_auth.py` checks every served route for `401` without a token and `403` for viewers.
