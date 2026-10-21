@@ -27,6 +27,14 @@ def get_client() -> ApiClient:
     return ApiClient(load_settings())
 
 
+def _visitor_client() -> ApiClient:
+    """The shared client, carrying this visitor's address when behind the trusted proxy."""
+    client = get_client()
+    if not client.trusts_proxy:
+        return client
+    return client.for_visitor(session.visitor_address(st.context.headers.get("X-Forwarded-For")))
+
+
 def current_user() -> session.SignedIn | None:
     return session.current(st.session_state)
 
@@ -39,7 +47,7 @@ def can_write() -> bool:
 
 def sign_in(username: str, password: str) -> None:
     """Sign this tab in, or raise ``ApiError``. The password is not kept anywhere."""
-    result = get_client().login(username, password)
+    result = _visitor_client().login(username, password)
     session.begin(
         st.session_state,
         session.SignedIn(
@@ -53,7 +61,7 @@ def sign_in(username: str, password: str) -> None:
 
 def start_demo() -> None:
     """Open a private demo sandbox in this tab (M12), or raise ``ApiError``."""
-    result = get_client().start_demo()
+    result = _visitor_client().start_demo()
     session.begin(
         st.session_state,
         session.SignedIn(
@@ -85,7 +93,7 @@ def sign_out() -> None:
     if user is not None:
         # Best effort: the token is forgotten either way, and expires on its own.
         with contextlib.suppress(ApiError):
-            get_client().with_token(user.token).logout()
+            _visitor_client().with_token(user.token).logout()
     demo = user is not None and user.demo
     session.end(st.session_state, session.DEMO_SIGNED_OUT if demo else session.SIGNED_OUT)
     clear_lead_data()
@@ -101,7 +109,7 @@ def _signed_in_client() -> ApiClient:
     user = current_user()
     if user is None:
         raise ApiError(ApiErrorKind.UNAUTHORIZED, NOT_SIGNED_IN)
-    return get_client().with_token(user.token, on_session_end=_session_ended)
+    return _visitor_client().with_token(user.token, on_session_end=_session_ended)
 
 
 @dataclass(frozen=True)

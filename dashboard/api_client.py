@@ -151,8 +151,10 @@ class ApiClient:
         *,
         token: SecretStr | None = None,
         on_session_end: Callable[[], None] | None = None,
+        forwarded_for: str | None = None,
     ) -> None:
         self._settings = settings
+        self._forwarded_for = forwarded_for
         self._base_url = settings.api_url
         self._token = token
         self._on_session_end = on_session_end
@@ -163,7 +165,27 @@ class ApiClient:
         self, token: SecretStr, *, on_session_end: Callable[[], None] | None = None
     ) -> "ApiClient":
         """A client for one signed-in person, sharing this client's connection pool."""
-        return ApiClient(self._settings, self._session, token=token, on_session_end=on_session_end)
+        return ApiClient(
+            self._settings,
+            self._session,
+            token=token,
+            on_session_end=on_session_end,
+            forwarded_for=self._forwarded_for,
+        )
+
+    def for_visitor(self, address: str | None) -> "ApiClient":
+        """The same client, telling the API which visitor it acts for (M12, behind a proxy)."""
+        return ApiClient(
+            self._settings,
+            self._session,
+            token=self._token,
+            on_session_end=self._on_session_end,
+            forwarded_for=address,
+        )
+
+    @property
+    def trusts_proxy(self) -> bool:
+        return self._settings.trust_proxy
 
     @property
     def base_url(self) -> str:
@@ -395,6 +417,8 @@ class ApiClient:
         read_timeout: float | None = None,
     ) -> JsonObject:
         headers = {"Accept": "application/json"}
+        if self._forwarded_for is not None:
+            headers["X-Forwarded-For"] = self._forwarded_for
         if content_type is not None:
             headers["Content-Type"] = content_type
         if auth:

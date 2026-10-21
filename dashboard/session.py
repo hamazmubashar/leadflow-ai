@@ -6,6 +6,7 @@ it signs the person out (accepted for now; the API session simply expires).
 """
 
 import hashlib
+import ipaddress
 from collections.abc import MutableMapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -62,6 +63,21 @@ def data_scope(signed_in: SignedIn) -> str:
         return "main"
     digest = hashlib.sha256(signed_in.token.get_secret_value().encode()).hexdigest()
     return f"demo:{digest}"
+
+
+def visitor_address(forwarded_for: str | None) -> str | None:
+    """The visitor's IP address from the proxy's ``X-Forwarded-For``, or None.
+
+    The bundled Caddy proxy replaces any value a visitor sends with the real address,
+    so the first entry is trusted; anything that isn't an IP address is ignored.
+    """
+    if not forwarded_for:
+        return None
+    first = forwarded_for.split(",", 1)[0].strip()
+    try:
+        return str(ipaddress.ip_address(first))
+    except ValueError:
+        return None
 
 
 def begin(state: State, signed_in: SignedIn) -> None:

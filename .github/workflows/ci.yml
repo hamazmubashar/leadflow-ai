@@ -26,3 +26,27 @@ jobs:
       # Dashboard (M7): needs the ui dependency group
       - run: uv run --locked --group ui mypy dashboard
       - run: uv run --locked --group ui pytest dashboard/tests --no-cov -p no:cacheprovider
+
+  # M12: the production image builds, runs as a non-root user, migrates the database,
+  # serves the API and the demo, and the compose file is valid.
+  docker:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - run: docker build --tag leadflow-ai:ci .
+      - name: The image starts, migrates and answers
+        run: |
+          docker run -d --name api -e LEADFLOW_DEMO_ENABLED=true leadflow-ai:ci
+          for _ in $(seq 1 30); do
+            if docker exec api python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"; then break; fi
+            sleep 1
+          done
+          docker exec api python -c "import json, urllib.request; print(json.load(urllib.request.urlopen('http://127.0.0.1:8000/api/v1/demo', timeout=2)))"
+          test "$(docker exec api id -u)" = "10001"
+          docker logs api
+      - name: The compose file is valid
+        run: |
+          cp deploy/production.env.example deploy/production.env
+          docker compose config --quiet

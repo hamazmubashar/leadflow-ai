@@ -33,6 +33,10 @@ class DashboardSettings(BaseSettings):
         default=None, description="Optional service key, used by scripts, never by the app."
     )
     request_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
+    # M12: behind the bundled Caddy proxy, pass each visitor's address (from the
+    # X-Forwarded-For header Caddy sets) to the API, so its limits apply per visitor.
+    # Never enable this without a proxy that overwrites the header: visitors could fake it.
+    trust_proxy: bool = Field(default=False, description="Forward visitor addresses to the API.")
 
     @field_validator("api_url")
     @classmethod
@@ -42,9 +46,14 @@ class DashboardSettings(BaseSettings):
             raise ValueError("api_url must be an http:// or https:// URL with a host")
         if parts.username or parts.password or parts.query or parts.fragment:
             raise ValueError("api_url must not include credentials, a query or a fragment")
-        if parts.scheme == "http" and parts.hostname not in _LOCAL_HOSTS:
+        # Plain http only to this machine, or to a single-label name such as Docker's
+        # "api" service, which is never a public internet host (M12).
+        if parts.scheme == "http" and not _is_private_name(parts.hostname):
             # The bearer token would cross the network unencrypted.
-            raise ValueError("plain http:// is only allowed for localhost; use https://")
+            raise ValueError(
+                "plain http:// is only allowed for localhost or an internal service name;"
+                " use https://"
+            )
         return value.strip().rstrip("/")
 
     @field_validator("operator_token")
@@ -53,6 +62,12 @@ class DashboardSettings(BaseSettings):
         if value is None or not value.get_secret_value().strip():
             return None
         return value
+
+
+def _is_private_name(hostname: str) -> bool:
+    return hostname in _LOCAL_HOSTS or (
+        "." not in hostname and ":" not in hostname and hostname.replace("-", "").isalnum()
+    )
 
 
 class ConfigError(Exception):

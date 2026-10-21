@@ -43,3 +43,7 @@ htmlcov/
 
 # M12 demo sandboxes (disposable copies of the fictional demo data)
 demo-sandboxes/
+
+# M12 deployment: secrets and local backups
+deploy/production.env
+backups/

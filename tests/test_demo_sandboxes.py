@@ -2,6 +2,7 @@
 
 import re
 import sqlite3
+import time
 from collections.abc import Iterator
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
@@ -364,3 +365,37 @@ def test_ending_an_unknown_or_malformed_token(manager: tuple[SandboxManager, Clo
     assert sandboxes.end("x" * 43) is False
     assert sandboxes.end("") is False
     assert sandboxes.resolve("") is None
+
+
+def test_sweep_deletes_expired_sandboxes_without_any_request(
+    manager: tuple[SandboxManager, Clock], demo_dir: Path
+) -> None:
+    sandboxes, clock = manager
+    sandboxes.create("203.0.113.1")
+    sandboxes.sweep()
+    assert len(sandboxes_on_disk(demo_dir)) == 1
+    clock.now += timedelta(hours=2)
+    sandboxes.sweep()
+    assert sandboxes_on_disk(demo_dir) == []
+
+
+def test_the_sweeper_runs_on_its_own(demo_dir: Path) -> None:
+    clock = Clock()
+    sandboxes = SandboxManager(
+        demo_dir, max_sandboxes=5, lifetime=timedelta(hours=1), clock=clock, sweep_seconds=0.01
+    )
+    sandboxes.start()
+    try:
+        sandboxes.create("203.0.113.1")
+        clock.now += timedelta(hours=1)
+        deadline = time.monotonic() + 5
+        while sandboxes.active() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert sandboxes.active() == 0
+    finally:
+        sandboxes.close()
+    sandboxes.close()  # closing twice is harmless
+
+
+def sandboxes_on_disk(demo_dir: Path) -> list[str]:
+    return sandbox_files(demo_dir)

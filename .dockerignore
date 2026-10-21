@@ -1,0 +1,22 @@
+# Keep secrets, databases and local tooling out of the image build context.
+.env
+.env.*
+!.env.example
+*.db
+*.db-*
+demo-sandboxes/
+backups/
+.git/
+.github/
+.venv/
+**/__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+docs/
+tests/
+dashboard/tests/
+scripts/
+demo/

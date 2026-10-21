@@ -28,8 +28,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from alembic import command
-from alembic.config import Config
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -37,6 +35,7 @@ from leadflow_ai.accounts import Role, new_session_token, token_hash
 from leadflow_ai.api.login_limit import LoginRateLimitedError, LoginRateLimiter
 from leadflow_ai.config import DatabaseSettings
 from leadflow_ai.db.engine import create_db_engine
+from leadflow_ai.db.migrate import upgrade
 from leadflow_ai.db.models import LeadRecord, UserRecord
 from leadflow_ai.db.session import Database, create_session_factory
 from leadflow_ai.demo.harborline import APPROVED, DRAFTS, STATUS_PATHS, leads_csv
@@ -56,8 +55,7 @@ MAX_DEMO_IMPORT_ROWS = 100
 SANDBOXES_PER_ADDRESS_PER_HOUR = 5
 FULL_RETRY_SECONDS = 60
 TEMPLATE_NAME = "template.db"
-# The Alembic scripts ship inside the package (src/leadflow_ai/db/migrations).
-MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "db" / "migrations"
+SWEEP_SECONDS = 300.0  # how often expired sandboxes are deleted even with no traffic
 _SQLITE_SUFFIXES = ("", "-wal", "-shm", "-journal")
 
 
@@ -102,8 +100,12 @@ class SandboxManager:
         max_sandboxes: int,
         lifetime: timedelta,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        sweep_seconds: float = SWEEP_SECONDS,
     ) -> None:
         self._dir = directory.resolve()
+        self._sweep_seconds = sweep_seconds
+        self._stop = threading.Event()
+        self._sweeper: threading.Thread | None = None
         self._max = max_sandboxes
         self._lifetime = lifetime
         self._clock = clock
@@ -127,9 +129,16 @@ class SandboxManager:
         for leftover in self._dir.glob("*.db*"):
             leftover.unlink(missing_ok=True)
         build_template(self.template, now=self._clock())
+        self._stop.clear()
+        self._sweeper = threading.Thread(target=self._sweep_forever, daemon=True)
+        self._sweeper.start()
 
     def close(self) -> None:
         """Delete every sandbox and the template (at shutdown)."""
+        self._stop.set()
+        if self._sweeper is not None:
+            self._sweeper.join(timeout=5)
+            self._sweeper = None
         with self._lock:
             sandboxes = list(self._by_token.values())
             self._by_token.clear()
@@ -188,6 +197,15 @@ class SandboxManager:
         _destroy(sandbox)
         return True
 
+    def sweep(self) -> None:
+        """Delete every expired sandbox now (also runs on its own every few minutes)."""
+        with self._lock:
+            self._expire(self._clock())
+
+    def _sweep_forever(self) -> None:
+        while not self._stop.wait(self._sweep_seconds):
+            self.sweep()
+
     def active(self) -> int:
         with self._lock:
             return len(self._by_token)
@@ -213,10 +231,7 @@ def build_template(path: Path, *, now: datetime) -> None:
     """Migrate a new database at ``path`` and fill it with the Harborline story."""
     _unlink_sqlite(path)
     url = f"sqlite:///{path}"
-    config = Config()
-    config.set_main_option("script_location", str(MIGRATIONS_DIR))
-    config.attributes["database_url"] = url
-    command.upgrade(config, "head")
+    upgrade(url)
 
     engine = create_db_engine(DatabaseSettings(database_url=url))
     try:

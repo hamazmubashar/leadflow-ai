@@ -3,6 +3,7 @@
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import pytest
 from pydantic import SecretStr
 
 from dashboard import session
@@ -130,3 +131,18 @@ def test_each_demo_has_its_own_data_scope() -> None:
     assert first != second
     assert first.startswith("demo:") and "a" * 43 not in first  # the token is not the key
     assert session.data_scope(signed_in()) == session.data_scope(signed_in(Role.VIEWER)) == "main"
+
+
+@pytest.mark.parametrize(
+    ("header", "expected"),
+    [
+        ("203.0.113.7", "203.0.113.7"),
+        ("203.0.113.7, 10.0.0.2", "203.0.113.7"),
+        (" 2001:db8::1 ", "2001:db8::1"),
+        ("not-an-address", None),
+        ("", None),
+        (None, None),
+    ],
+)
+def test_visitor_address(header: str | None, expected: str | None) -> None:
+    assert session.visitor_address(header) == expected

@@ -729,3 +729,21 @@ def test_a_full_demo_shows_the_api_message() -> None:
     client, _ = client_for(respond(503, {"detail": detail}))
     error = raised(client.start_demo)
     assert (error.code, error.message) == ("demo.full", "All demo slots are in use.")
+
+
+# --- behind the proxy (M12) ----------------------------------------------------------------------
+
+
+def test_the_visitor_address_is_forwarded_only_when_given() -> None:
+    client, session = client_for(respond(200, {"username": "demo", "role": "viewer"}))
+    client.me()
+    assert "X-Forwarded-For" not in session.calls[0]["headers"]
+    visitor = client.for_visitor("203.0.113.7")
+    visitor.me()
+    visitor.with_token(SecretStr("t" * 43)).me()
+    assert [call["headers"].get("X-Forwarded-For") for call in session.calls[1:]] == [
+        "203.0.113.7",
+        "203.0.113.7",
+    ]
+    assert session.calls[2]["headers"]["Authorization"] == "Bearer " + "t" * 43
+    assert client.trusts_proxy is False

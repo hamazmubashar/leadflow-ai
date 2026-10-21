@@ -51,6 +51,9 @@ def test_a_blank_service_key_means_none(monkeypatch: pytest.MonkeyPatch, value: 
     "url",
     [
         "http://192.168.1.20:8000",  # plain http off this machine would expose the token
+        "http://api.example.com:8000",  # a public name over plain http
+        "http://10.0.0.5:8000",
+        "http://my_host:8000",
         "ftp://localhost",
         "localhost:8000",
         "https://user:pass@example.com",
@@ -76,6 +79,8 @@ def test_unsafe_or_malformed_api_urls_are_rejected(
         "http://localhost:9000",
         "http://[::1]:8000",
         "https://api.example.com",
+        "http://api:8000",  # a Docker service name on the internal network (M12)
+        "http://leadflow-api:8000",
     ],
 )
 def test_local_http_and_any_https_are_accepted(monkeypatch: pytest.MonkeyPatch, url: str) -> None:
@@ -100,3 +105,9 @@ def test_errors_never_contain_the_token(monkeypatch: pytest.MonkeyPatch) -> None
         load_settings()
     assert TOKEN not in str(caught.value)
     assert caught.value.__cause__ is None
+
+
+def test_proxy_trust_is_off_unless_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert load_settings().trust_proxy is False
+    monkeypatch.setenv("LEADFLOW_TRUST_PROXY", "true")
+    assert load_settings().trust_proxy is True
