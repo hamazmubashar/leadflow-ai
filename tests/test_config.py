@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 
 from leadflow_ai.config import (
     DEFAULT_DATABASE_URL,
@@ -16,6 +16,7 @@ from tests.conftest import TEST_TOKEN
 def test_loads_token_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LEADFLOW_OPERATOR_TOKEN", TEST_TOKEN)
     settings = Settings(_env_file=None)
+    assert settings.operator_token is not None
     assert settings.operator_token.get_secret_value() == TEST_TOKEN
 
 
@@ -23,18 +24,32 @@ def test_loads_token_from_env_file(tmp_path: Path) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text(f"LEADFLOW_OPERATOR_TOKEN={TEST_TOKEN}\n", encoding="utf-8")
     settings = Settings(_env_file=env_file)
+    assert settings.operator_token is not None
     assert settings.operator_token.get_secret_value() == TEST_TOKEN
 
 
-def test_env_example_placeholder_is_rejected() -> None:
+def test_env_example_leaves_the_service_key_off() -> None:
+    # M11: the empty placeholder means login-only, not a startup error.
     env_example = Path(__file__).resolve().parents[1] / ".env.example"
-    with pytest.raises(ValidationError, match="operator_token"):
-        Settings(_env_file=env_example)
+    assert Settings(_env_file=env_example).operator_token is None
 
 
-def test_missing_token_is_rejected() -> None:
+def test_missing_token_means_login_only() -> None:
+    assert Settings(_env_file=None).operator_token is None
+
+
+def test_empty_token_means_login_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LEADFLOW_OPERATOR_TOKEN", "")
+    assert Settings(_env_file=None).operator_token is None
+    assert Settings(_env_file=None, operator_token=SecretStr("")).operator_token is None
+
+
+@pytest.mark.parametrize(
+    "token", [" " * 40, "x" * 20 + " " + "x" * 20, "x" * 40 + "\t", "\n" + "x" * 40]
+)
+def test_tokens_with_whitespace_are_rejected(token: str) -> None:
     with pytest.raises(ValidationError, match="operator_token"):
-        Settings(_env_file=None)
+        Settings(_env_file=None, operator_token=token)  # type: ignore[arg-type]
 
 
 def test_short_token_is_rejected() -> None:
@@ -46,6 +61,7 @@ def test_short_token_is_rejected() -> None:
 def test_minimum_length_token_is_accepted() -> None:
     token = "x" * MIN_OPERATOR_TOKEN_LENGTH
     settings = Settings(_env_file=None, operator_token=token)  # type: ignore[arg-type]
+    assert settings.operator_token is not None
     assert settings.operator_token.get_secret_value() == token
 
 

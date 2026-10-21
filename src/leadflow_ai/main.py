@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 
 from leadflow_ai import __version__
+from leadflow_ai.api.accounts import router as accounts_router
 from leadflow_ai.api.assist import router as assist_router
 from leadflow_ai.api.drafts import outbox_router
 from leadflow_ai.api.drafts import router as drafts_router
@@ -22,6 +23,7 @@ from leadflow_ai.api.limits import (
     MAX_REQUEST_BODY_BYTES,
     BodySizeLimitMiddleware,
 )
+from leadflow_ai.api.login_limit import LoginRateLimiter
 from leadflow_ai.api.workflows import router as workflows_router
 from leadflow_ai.config import Settings, get_settings
 from leadflow_ai.db.session import Database
@@ -60,6 +62,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # to the model server at startup; the first AI-draft request does.
     app.state.text_generator = generator_from_settings(resolved)
     app.state.generation_lock = threading.Lock()
+    app.state.login_limiter = LoginRateLimiter()  # per process; see api/login_limit.py
     app.dependency_overrides[get_settings] = lambda: resolved
     app.add_middleware(
         BodySizeLimitMiddleware,
@@ -67,6 +70,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         path_limits={IMPORT_PATH: MAX_IMPORT_BODY_BYTES},
     )
     register_error_handlers(app)
+    app.include_router(accounts_router)
     app.include_router(leads_router)
     app.include_router(drafts_router)
     app.include_router(outbox_router)

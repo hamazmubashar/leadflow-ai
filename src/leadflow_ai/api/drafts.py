@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, ConfigDict
 
 from leadflow_ai.api.deps import JsonObjectBody, SessionDep
-from leadflow_ai.auth import require_operator
+from leadflow_ai.auth import AuthorizedUser, authorize
 from leadflow_ai.db.models import LeadDraftRecord
 from leadflow_ai.drafts import DraftGenerator, DraftStatus, DraftTemplate
 from leadflow_ai.services.drafts import (
@@ -31,10 +31,8 @@ from leadflow_ai.services.leads import DEFAULT_PAGE_LIMIT, MAX_OFFSET, MAX_PAGE_
 DRAFTS_PREFIX = "/api/v1/drafts"
 OUTBOX_PREFIX = "/api/v1/outbox"
 
-router = APIRouter(prefix="/api/v1", tags=["drafts"], dependencies=[Depends(require_operator)])
-outbox_router = APIRouter(
-    prefix=OUTBOX_PREFIX, tags=["outbox"], dependencies=[Depends(require_operator)]
-)
+router = APIRouter(prefix="/api/v1", tags=["drafts"], dependencies=[Depends(authorize)])
+outbox_router = APIRouter(prefix=OUTBOX_PREFIX, tags=["outbox"], dependencies=[Depends(authorize)])
 
 
 class DraftOut(BaseModel):
@@ -141,13 +139,17 @@ def _draft_or_404(session: SessionDep, draft_id: str) -> LeadDraftRecord:
     },
 )
 def create(
-    lead_id: str, payload: JsonObjectBody, session: SessionDep, response: Response
+    lead_id: str,
+    payload: JsonObjectBody,
+    session: SessionDep,
+    response: Response,
+    principal: AuthorizedUser,
 ) -> DraftOut:
     template = parse_draft_request(payload)
     lead = get_lead(session, lead_id)
     if lead is None:
         raise _not_found("lead.not_found", "Lead not found")
-    draft = create_draft(session, lead, template)
+    draft = create_draft(session, lead, template, actor_id=principal.user_id)
     response.headers["Location"] = f"{DRAFTS_PREFIX}/{draft.id}"
     return DraftOut.model_validate(draft)
 
@@ -180,8 +182,10 @@ def retrieve(draft_id: str, session: SessionDep) -> DraftOut:
     response_model=ApprovalOut,
     summary="Approve a draft and record a simulated outbox item (nothing is sent)",
 )
-def approve(draft_id: str, session: SessionDep) -> ApprovalOut:
-    draft, message = approve_draft(session, _draft_or_404(session, draft_id))
+def approve(draft_id: str, session: SessionDep, principal: AuthorizedUser) -> ApprovalOut:
+    draft, message = approve_draft(
+        session, _draft_or_404(session, draft_id), actor_id=principal.user_id
+    )
     return ApprovalOut(
         draft=DraftOut.model_validate(draft), outbox_message=_outbox_out(OutboxItem(message, draft))
     )
@@ -208,9 +212,14 @@ def approve(draft_id: str, session: SessionDep) -> ApprovalOut:
         }
     },
 )
-def reject(draft_id: str, payload: JsonObjectBody, session: SessionDep) -> DraftOut:
+def reject(
+    draft_id: str, payload: JsonObjectBody, session: SessionDep, principal: AuthorizedUser
+) -> DraftOut:
     reason = parse_rejection(payload)
-    return DraftOut.model_validate(reject_draft(session, _draft_or_404(session, draft_id), reason))
+    draft = reject_draft(
+        session, _draft_or_404(session, draft_id), reason, actor_id=principal.user_id
+    )
+    return DraftOut.model_validate(draft)
 
 
 @outbox_router.get(

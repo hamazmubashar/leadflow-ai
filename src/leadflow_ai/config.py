@@ -58,9 +58,12 @@ class DatabaseSettings(BaseSettings):
 class Settings(DatabaseSettings):
     """Runtime configuration for the API. Variables use the ``LEADFLOW_`` prefix."""
 
-    # SecretStr keeps the token out of repr(), str() and logs.
-    operator_token: SecretStr = Field(
-        description="Bearer token required for operator endpoints.",
+    # M11: optional service key for scripts; it acts as the reserved "system" account.
+    # Unset (or empty) means login-only: people sign in with their own accounts.
+    # SecretStr keeps the key out of repr(), str() and logs.
+    operator_token: SecretStr | None = Field(
+        default=None,
+        description="Optional service key (admin level, recorded as 'system'); unset = login only.",
     )
     # None means the packaged default rules. An explicit path that is missing or
     # invalid stops startup; there is no fallback to the defaults.
@@ -123,13 +126,27 @@ class Settings(DatabaseSettings):
             raise ValueError("llm_model must be a model name such as qwen2.5:3b")
         return value
 
+    @field_validator("operator_token", mode="before")
+    @classmethod
+    def _empty_token_means_no_service_key(cls, value: object) -> object:
+        # LEADFLOW_OPERATOR_TOKEN= (as in .env.example) disables the service key. A
+        # whitespace-only value is not "empty": it is kept and refused below.
+        if value == "" or (isinstance(value, SecretStr) and value.get_secret_value() == ""):
+            return None
+        return value
+
     @field_validator("operator_token")
     @classmethod
-    def _check_token_length(cls, value: SecretStr) -> SecretStr:
+    def _check_token_length(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is None:
+            return None
         if len(value.get_secret_value()) < MIN_OPERATOR_TOKEN_LENGTH:
             raise ValueError(
                 f"operator_token must be at least {MIN_OPERATOR_TOKEN_LENGTH} characters"
             )
+        if any(character.isspace() for character in value.get_secret_value()):
+            # A bearer header can't carry it intact, so such a key could never be used.
+            raise ValueError("operator_token must not contain spaces")
         return value
 
 

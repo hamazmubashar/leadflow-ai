@@ -1,4 +1,4 @@
-"""Lead endpoints. Every route requires the operator bearer token."""
+"""Lead endpoints. Every route requires sign-in; changes require the admin role."""
 
 from datetime import datetime
 from typing import Annotated, Literal
@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, ConfigDict
 
 from leadflow_ai.api.deps import CsvBody, JsonObjectBody, ScoringRulesDep, SessionDep
-from leadflow_ai.auth import require_operator
+from leadflow_ai.auth import AuthorizedUser, authorize
 from leadflow_ai.db.models import LeadEventRecord
 from leadflow_ai.imports.csv_reader import read_leads_csv
 from leadflow_ai.leads import LeadSource
@@ -27,7 +27,7 @@ from leadflow_ai.services.lifecycle import change_status, parse_status_change, r
 PREFIX = "/api/v1/leads"
 IMPORT_PATH = f"{PREFIX}/import"
 
-router = APIRouter(prefix=PREFIX, tags=["leads"], dependencies=[Depends(require_operator)])
+router = APIRouter(prefix=PREFIX, tags=["leads"], dependencies=[Depends(authorize)])
 
 
 class LeadOut(BaseModel):
@@ -135,8 +135,10 @@ _LEAD_INPUT_SCHEMA = {
         }
     },
 )
-def create(payload: JsonObjectBody, session: SessionDep, response: Response) -> LeadOut:
-    record = create_lead(session, payload)
+def create(
+    payload: JsonObjectBody, session: SessionDep, response: Response, principal: AuthorizedUser
+) -> LeadOut:
+    record = create_lead(session, payload, actor_id=principal.user_id)
     response.headers["Location"] = f"{PREFIX}/{record.id}"
     return LeadOut.model_validate(record)
 
@@ -175,8 +177,8 @@ def retrieve(lead_id: str, session: SessionDep) -> LeadOut:
         }
     },
 )
-def import_csv(body: CsvBody, session: SessionDep) -> ImportOut:
-    result = import_leads(session, read_leads_csv(body))
+def import_csv(body: CsvBody, session: SessionDep, principal: AuthorizedUser) -> ImportOut:
+    result = import_leads(session, read_leads_csv(body), actor_id=principal.user_id)
     return ImportOut(imported=result.imported, lead_ids=list(result.lead_ids))
 
 
@@ -253,13 +255,13 @@ def _event_out(event: LeadEventRecord) -> LeadEventOut:
     },
 )
 def change_lead_status(
-    lead_id: str, payload: JsonObjectBody, session: SessionDep
+    lead_id: str, payload: JsonObjectBody, session: SessionDep, principal: AuthorizedUser
 ) -> StatusChangeOut:
     request = parse_status_change(payload)
     record = get_lead(session, lead_id)
     if record is None:
         raise _not_found()
-    event = change_status(session, record, request)
+    event = change_status(session, record, request, actor_id=principal.user_id)
     return StatusChangeOut(
         lead_id=record.id, status=LeadStatus(record.status), event=_event_out(event)
     )

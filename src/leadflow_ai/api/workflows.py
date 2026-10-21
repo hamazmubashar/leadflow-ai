@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, ConfigDict
 
 from leadflow_ai.api.deps import JsonObjectBody, ScoringRulesDep, SessionDep
-from leadflow_ai.auth import require_operator
+from leadflow_ai.auth import AuthorizedUser, authorize
 from leadflow_ai.db.models import WorkflowRunRecord
 from leadflow_ai.services.leads import DEFAULT_PAGE_LIMIT, MAX_OFFSET, MAX_PAGE_LIMIT
 from leadflow_ai.services.workflows import (
@@ -29,7 +29,7 @@ from leadflow_ai.workflows import ItemOutcome, RunMode, RunStatus
 RUNS_PREFIX = "/api/v1/workflow-runs"
 START_PATH = "/api/v1/workflows/new-lead-outreach/runs"
 
-router = APIRouter(tags=["workflows"], dependencies=[Depends(require_operator)])
+router = APIRouter(tags=["workflows"], dependencies=[Depends(authorize)])
 
 
 class CountsOut(BaseModel):
@@ -143,10 +143,14 @@ def _run_or_404(session: SessionDep, run_id: str) -> WorkflowRunRecord:
     },
 )
 def start(
-    payload: JsonObjectBody, session: SessionDep, rules: ScoringRulesDep, response: Response
+    payload: JsonObjectBody,
+    session: SessionDep,
+    rules: ScoringRulesDep,
+    response: Response,
+    principal: AuthorizedUser,
 ) -> RunOut:
     mode = parse_run_request(payload)
-    run = run_workflow(session, rules, mode)
+    run = run_workflow(session, rules, mode, started_by_id=principal.user_id)
     response.headers["Location"] = f"{RUNS_PREFIX}/{run.id}"
     return _run_out(run, run_counts(session, [run.id])[run.id])
 

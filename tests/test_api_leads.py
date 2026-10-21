@@ -3,17 +3,19 @@
 import uuid
 from collections.abc import Mapping
 from datetime import UTC, datetime
+from typing import Any
 
 import pytest
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
+from leadflow_ai.api.accounts import router as accounts_router
 from leadflow_ai.api.assist import router as assist_router
 from leadflow_ai.api.drafts import outbox_router
 from leadflow_ai.api.drafts import router as drafts_router
 from leadflow_ai.api.leads import router as leads_router
 from leadflow_ai.api.workflows import router as workflows_router
-from leadflow_ai.auth import require_operator
+from leadflow_ai.auth import authenticate, authorize
 from leadflow_ai.main import create_app
 from tests.conftest import AUTH_HEADERS, TEST_TOKEN
 
@@ -73,10 +75,12 @@ def test_unauthenticated_requests_never_reach_body_parsing_or_storage(api: TestC
     assert api.get(LEADS, headers=AUTH_HEADERS).json()["items"] == []
 
 
-def test_all_api_routes_declare_operator_auth(api: TestClient) -> None:
+def test_all_api_routes_declare_central_auth(api: TestClient) -> None:
     # Every operation the app serves under /api (per its OpenAPI schema) must be a
-    # route of one of these routers, and every one of their routes must depend on auth.
-    routers = (leads_router, drafts_router, outbox_router, workflows_router, assist_router)
+    # route of one of these routers. Every route of the protected routers depends on
+    # ``authorize`` (sign-in + role); the sign-in routes are checked one by one.
+    protected = (leads_router, drafts_router, outbox_router, workflows_router, assist_router)
+    routers = (*protected, accounts_router)
     served = {
         (method.upper(), path)
         for path, operations in api.get("/openapi.json").json()["paths"].items()
@@ -114,13 +118,33 @@ def test_all_api_routes_declare_operator_auth(api: TestClient) -> None:
             ("GET", "/api/v1/workflow-runs/{run_id}/items"),
             ("POST", f"{LEADS}/{{lead_id}}/drafts/ai"),
             ("GET", "/api/v1/assist/status"),
+            ("POST", "/api/v1/auth/login"),
+            ("POST", "/api/v1/auth/logout"),
+            ("GET", "/api/v1/auth/me"),
         }
     )
-    for router in routers:
+    for router in protected:
         for route in router.routes:
             assert isinstance(route, APIRoute)
             calls = {dependency.call for dependency in route.dependant.dependencies}
-            assert require_operator in calls, route.path
+            assert authorize in calls, route.path
+    sign_in_routes = {
+        route.path: _all_calls(route.dependant)
+        for route in accounts_router.routes
+        if isinstance(route, APIRoute)
+    }
+    assert authenticate not in sign_in_routes["/api/v1/auth/login"]  # the one public route
+    assert authorize not in sign_in_routes["/api/v1/auth/login"]
+    assert authenticate in sign_in_routes["/api/v1/auth/logout"]  # any role may sign out
+    assert authenticate in sign_in_routes["/api/v1/auth/me"]
+
+
+def _all_calls(dependant: Any) -> set[Any]:
+    calls: set[Any] = set()
+    for dependency in dependant.dependencies:
+        calls.add(dependency.call)
+        calls |= _all_calls(dependency)
+    return calls
 
 
 # --- create and retrieve ------------------------------------------------------------

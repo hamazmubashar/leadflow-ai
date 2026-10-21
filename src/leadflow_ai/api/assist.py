@@ -1,4 +1,4 @@
-"""AI-assisted draft endpoints (M9). Every route requires the operator token.
+"""AI-assisted draft endpoints (M9). Every route requires sign-in; creating needs admin.
 
 ``POST /api/v1/leads/{lead_id}/drafts/ai`` asks the local model for a draft body and
 stores an ordinary ``pending_review`` draft: a person still approves or rejects it on
@@ -18,7 +18,7 @@ from pydantic import BaseModel
 from leadflow_ai.api.deps import JsonObjectBody, SessionDep
 from leadflow_ai.api.drafts import DRAFTS_PREFIX, DraftOut
 from leadflow_ai.assist import GenerationError, GenerationErrorCode, TextGenerator
-from leadflow_ai.auth import require_operator
+from leadflow_ai.auth import AuthorizedUser, authorize
 from leadflow_ai.drafts import DraftTemplate
 from leadflow_ai.services.ai_drafts import create_ai_draft
 from leadflow_ai.services.drafts import parse_draft_request
@@ -27,7 +27,7 @@ from leadflow_ai.services.leads import get_lead
 AI_DRAFT_PATH = "/api/v1/leads/{lead_id}/drafts/ai"
 STATUS_PATH = "/api/v1/assist/status"
 
-router = APIRouter(tags=["assist"], dependencies=[Depends(require_operator)])
+router = APIRouter(tags=["assist"], dependencies=[Depends(authorize)])
 
 
 class AssistStatusOut(BaseModel):
@@ -89,6 +89,7 @@ def create_ai(
     response: Response,
     generator: GeneratorDep,
     lock: LockDep,
+    principal: AuthorizedUser,
 ) -> DraftOut:
     template = parse_draft_request(payload)
     lead = get_lead(session, lead_id)
@@ -101,7 +102,7 @@ def create_ai(
     if not lock.acquire(blocking=False):
         raise GenerationError(GenerationErrorCode.BUSY)
     try:
-        draft = create_ai_draft(session, lead, template, generator)
+        draft = create_ai_draft(session, lead, template, generator, actor_id=principal.user_id)
     finally:
         lock.release()
     response.headers["Location"] = f"{DRAFTS_PREFIX}/{draft.id}"

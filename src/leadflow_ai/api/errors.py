@@ -8,6 +8,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import OperationalError
 
+from leadflow_ai.api.login_limit import LoginRateLimitedError
 from leadflow_ai.assist import GenerationError, GenerationErrorCode
 from leadflow_ai.drafts import ELIGIBLE_LEAD_STATUSES
 from leadflow_ai.imports.csv_reader import CsvFileError
@@ -174,6 +175,18 @@ def _schema_out_of_date(message: str) -> bool:
     )
 
 
+async def _login_rate_limited(request: Request, exc: Exception) -> JSONResponse:
+    retry_after = cast(LoginRateLimitedError, exc).retry_after_seconds
+    return _error(
+        429,
+        {
+            "code": "auth.rate_limited",
+            "message": "Too many sign-in attempts from this address; try again later",
+        },
+        **{"Retry-After": str(retry_after)},
+    )
+
+
 async def _invalid_transition(request: Request, exc: Exception) -> JSONResponse:
     error = cast(InvalidTransitionError, exc)
     return _error(
@@ -302,4 +315,5 @@ def register_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(DraftAlreadyDecidedError, _draft_already_decided)
     app.add_exception_handler(RunInProgressError, _workflow_run_in_progress)
     app.add_exception_handler(GenerationError, _generation_failed)
+    app.add_exception_handler(LoginRateLimitedError, _login_rate_limited)
     app.add_exception_handler(OperationalError, _database_unavailable)
