@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 
 from leadflow_ai.accounts import SYSTEM_USER_ID, Role
 from leadflow_ai.api.accounts import client_address
-from leadflow_ai.api.login_limit import LoginRateLimiter
+from leadflow_ai.api.login_limit import LoginRateLimiter, UsernameLockout
 from leadflow_ai.config import Settings
 from leadflow_ai.main import create_app
 from tests.auth_helpers import (
@@ -123,13 +123,87 @@ def test_deactivated_accounts_cannot_log_in(api: TestClient, database_url: str) 
     assert _login(api, ADMIN, ADMIN_PASSWORD).json() == INVALID_CREDENTIALS
 
 
-def test_five_failures_lock_the_account_without_saying_so(api: TestClient) -> None:
-    for _ in range(5):
+LOCKED = {
+    "detail": {
+        "code": "auth.locked",
+        "message": "Too many failed attempts. Sign-in is locked for 15 minutes.",
+        "retry_after_seconds": 900,
+    }
+}
+
+
+class Clock:
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+@pytest.mark.parametrize("username", [ADMIN, "nobody-at-all"], ids=["real", "unknown"])
+def test_the_third_failure_locks_sign_in_for_15_minutes(api: TestClient, username: str) -> None:
+    """Identical for real and unknown names, so the lockout reveals no account."""
+    for _ in range(2):
+        assert _login(api, username, "wrong password entirely").json() == INVALID_CREDENTIALS
+    third = _login(api, username, "wrong password entirely")
+    assert third.status_code == 429
+    assert third.json() == LOCKED
+    assert third.headers["Retry-After"] == "900"
+    with patch("leadflow_ai.services.accounts.verify_password") as verify:
+        during = _login(api, username, ADMIN_PASSWORD)  # even the right password
+    verify.assert_not_called()  # no password work while locked
+    assert during.status_code == 429
+    assert during.json()["detail"]["code"] == "auth.locked"
+    assert 1 <= during.json()["detail"]["retry_after_seconds"] <= 900
+    assert _login(api, VIEWER, VIEWER_PASSWORD).status_code == 200  # other names unaffected
+
+
+def test_the_lock_expires_and_sign_in_works_again(app: FastAPI) -> None:
+    clock = Clock()
+    app.state.username_lockout = UsernameLockout(clock=clock)
+    with TestClient(app) as client:
+        for _ in range(3):
+            _login(client, ADMIN, "wrong password entirely")
+        assert _login(client, ADMIN, ADMIN_PASSWORD).status_code == 429
+        clock.now += 899
+        assert _login(client, ADMIN, ADMIN_PASSWORD).json()["detail"]["retry_after_seconds"] == 1
+        clock.now += 1
+        # The database lock (same 15 minutes, real time) is the remaining guard here, so
+        # move its clock too: it was set by the third failure.
+        with patch("leadflow_ai.services.accounts.datetime") as fake:
+            fake.now.return_value = datetime.now(UTC) + timedelta(minutes=15, seconds=1)
+            assert _login(client, ADMIN, ADMIN_PASSWORD).status_code == 200
+
+
+def test_a_success_resets_the_consecutive_count(api: TestClient) -> None:
+    for _ in range(2):
+        _login(api, ADMIN, "wrong password entirely")
+    assert _login(api, ADMIN, ADMIN_PASSWORD).status_code == 200
+    for _ in range(2):
         assert _login(api, ADMIN, "wrong password entirely").status_code == 401
-    locked = _login(api, ADMIN, ADMIN_PASSWORD)
+
+
+def test_the_database_lock_survives_an_api_restart(app: FastAPI) -> None:
+    with TestClient(app) as client:
+        for _ in range(3):
+            _login(client, ADMIN, "wrong password entirely")
+    app.state.username_lockout = UsernameLockout()  # a restart forgets the in-memory lock
+    with TestClient(app) as client:
+        locked = _login(client, ADMIN, ADMIN_PASSWORD)
     assert locked.status_code == 401
-    assert locked.json() == INVALID_CREDENTIALS  # same answer as a wrong password
-    assert _login(api, VIEWER, VIEWER_PASSWORD).status_code == 200  # other accounts unaffected
+    assert locked.json() == INVALID_CREDENTIALS  # still refused, without saying why
+
+
+def test_an_unanswered_attempt_is_not_counted(app: FastAPI) -> None:
+    app.state.username_lockout = lockout = UsernameLockout()
+    with (
+        TestClient(app, raise_server_exceptions=False) as client,
+        patch("leadflow_ai.api.accounts.login", side_effect=RuntimeError("boom")),
+    ):
+        assert _login(client, ADMIN, ADMIN_PASSWORD).status_code == 500
+    lockout.begin(ADMIN)  # nothing was left counted as in flight
+    lockout.begin(ADMIN)
+    lockout.begin(ADMIN)
 
 
 @pytest.mark.parametrize(
@@ -201,21 +275,21 @@ def test_login_on_a_database_before_0006_reports_not_migrated(
 
 
 def test_ten_failed_attempts_from_one_address_are_then_refused(api: TestClient) -> None:
-    for _ in range(10):
-        assert _login(api, "nobody", "wrong password entirely").status_code == 401
+    for attempt in range(10):  # different names, so no single name is locked
+        assert _login(api, f"nobody{attempt}", "wrong password entirely").status_code == 401
     with patch("leadflow_ai.services.accounts.verify_password") as verify:
         limited = _login(api, ADMIN, ADMIN_PASSWORD)  # even the right password
         not_json = api.post(LOGIN, content=b"{}", headers={"content-type": "text/plain"})
     verify.assert_not_called()  # no password work while limited
     for response in (limited, not_json):
         assert response.status_code == 429  # before 415: nothing is parsed
-        assert response.json() == {
-            "detail": {
-                "code": "auth.rate_limited",
-                "message": "Too many sign-in attempts from this address; try again later",
-            }
+        detail = response.json()["detail"]
+        assert {k: detail[k] for k in ("code", "message")} == {
+            "code": "auth.rate_limited",
+            "message": "Too many sign-in attempts from this address; try again later",
         }
         assert 1 <= int(response.headers["Retry-After"]) <= 15 * 60
+        assert detail["retry_after_seconds"] == int(response.headers["Retry-After"])
     # Signed-in sessions keep working; only new sign-ins from this address wait.
     assert api.get(LEADS, headers=AUTH_HEADERS).status_code == 200
 

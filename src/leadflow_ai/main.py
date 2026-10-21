@@ -23,7 +23,7 @@ from leadflow_ai.api.limits import (
     MAX_REQUEST_BODY_BYTES,
     BodySizeLimitMiddleware,
 )
-from leadflow_ai.api.login_limit import LoginRateLimiter
+from leadflow_ai.api.login_limit import LoginRateLimiter, UsernameLockout
 from leadflow_ai.api.workflows import router as workflows_router
 from leadflow_ai.config import Settings, get_settings
 from leadflow_ai.db.session import Database
@@ -63,6 +63,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.text_generator = generator_from_settings(resolved)
     app.state.generation_lock = threading.Lock()
     app.state.login_limiter = LoginRateLimiter()  # per process; see api/login_limit.py
+    app.state.username_lockout = UsernameLockout()  # 3 failures -> 15 min, per process
     app.dependency_overrides[get_settings] = lambda: resolved
     app.add_middleware(
         BodySizeLimitMiddleware,

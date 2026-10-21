@@ -1,7 +1,9 @@
 """Dashboard settings, read from the same environment variables and .env file as the API.
 
-The dashboard never touches the database. It only needs the API's address and the
-operator token, which it sends as a bearer token on authenticated requests.
+The dashboard never touches the database. It needs only the API's address: people sign
+in with their own accounts (M11). ``LEADFLOW_OPERATOR_TOKEN`` (the API's optional
+service key) is read only for scripts such as ``scripts/seed_demo.py``; the dashboard
+app never sends it.
 """
 
 from urllib.parse import urlsplit
@@ -26,8 +28,10 @@ class DashboardSettings(BaseSettings):
     )
 
     api_url: str = Field(default=DEFAULT_API_URL, description="Base URL of the LeadFlow API.")
-    # SecretStr keeps the token out of repr(), str() and error messages.
-    operator_token: SecretStr = Field(description="Bearer token for /api/v1 endpoints.")
+    # SecretStr keeps the key out of repr(), str() and error messages. Scripts only.
+    operator_token: SecretStr | None = Field(
+        default=None, description="Optional service key, used by scripts, never by the app."
+    )
     request_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
 
     @field_validator("api_url")
@@ -45,9 +49,9 @@ class DashboardSettings(BaseSettings):
 
     @field_validator("operator_token")
     @classmethod
-    def _require_token(cls, value: SecretStr) -> SecretStr:
-        if not value.get_secret_value().strip():
-            raise ValueError("operator_token must not be empty")
+    def _blank_token_means_none(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is None or not value.get_secret_value().strip():
+            return None
         return value
 
 

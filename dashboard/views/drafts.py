@@ -15,7 +15,13 @@ from dashboard.api_client import ApiClient, ApiError
 from dashboard.leads import TEMPLATE_LABELS, DraftItem, LeadRow, describe_api_error
 from dashboard.models import Draft, DraftStatus, DraftTemplate
 from dashboard.overview import time_ago
-from dashboard.runtime import clear_lead_data, lead_snapshot, require_client
+from dashboard.runtime import (
+    READ_ONLY_HELP,
+    can_write,
+    clear_lead_data,
+    lead_snapshot,
+    require_client,
+)
 from dashboard.ui import (
     Tone,
     card,
@@ -111,7 +117,12 @@ def _generate(client: ApiClient, rows: list[LeadRow]) -> None:
                 "Drafts are rendered by the API from fixed, versioned templates and always "
                 "wait for human review. The API checks the lead is eligible."
             )
-            submitted = st.form_submit_button("Generate draft", type="primary")
+            submitted = st.form_submit_button(
+                "Generate draft",
+                type="primary",
+                disabled=not can_write(),
+                help=None if can_write() else READ_ONLY_HELP,
+            )
     if not submitted or lead is None or template is None:
         return
     try:
@@ -202,6 +213,9 @@ def _decided(draft: Draft) -> None:
 
 
 def _decide(client: ApiClient, draft: Draft, item: DraftItem) -> None:
+    if not can_write():
+        st.caption(READ_ONLY_HELP)
+        return
     reviewed = st.checkbox("I have read this draft and its recipient.", key=f"reviewed.{draft.id}")
     approve_col, reject_col = st.columns(2)
     with approve_col:

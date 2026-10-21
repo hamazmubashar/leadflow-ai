@@ -219,9 +219,10 @@ def test_unknown_users_still_cost_a_password_check(
 # --- lockout -------------------------------------------------------------------------------------
 
 
-def test_five_failures_lock_the_account_for_15_minutes(
+def test_three_failures_lock_the_account_for_15_minutes(
     factory: sessionmaker[Session], session: Session
 ) -> None:
+    assert MAX_FAILED_LOGINS == 3
     account(factory)
     for attempt in range(1, MAX_FAILED_LOGINS):
         fail(session)

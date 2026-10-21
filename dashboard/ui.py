@@ -11,7 +11,7 @@ from enum import StrEnum
 
 import streamlit as st
 
-from dashboard.api_client import ApiError
+from dashboard.api_client import ApiError, ApiErrorKind
 
 NAVY = "#0B1F3B"
 SURFACE = "#0F2A44"
@@ -123,7 +123,13 @@ def text_card(label: str, value: str) -> None:
 
 
 def show_api_error(error: ApiError) -> None:
-    """Render an ``ApiError`` as an alert, with the API's error code when there is one."""
+    """Render an ``ApiError`` as an alert, with the API's error code when there is one.
+
+    A rejected session token has already signed this tab out (see ``runtime``); rerun
+    straight to the sign-in page, which explains what happened.
+    """
+    if error.kind is ApiErrorKind.UNAUTHORIZED:
+        st.rerun()
     text = escape_markdown(error.message)
     if error.code:
         text += f"  \nError code: `{error.code.replace('`', '')}`"  # code span: shown literally

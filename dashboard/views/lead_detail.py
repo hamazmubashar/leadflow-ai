@@ -22,7 +22,7 @@ from dashboard.leads import (
 )
 from dashboard.models import DraftStatus, DraftTemplate, LeadStatus
 from dashboard.overview import time_ago
-from dashboard.runtime import clear_lead_data
+from dashboard.runtime import READ_ONLY_HELP, can_write, clear_lead_data
 from dashboard.ui import (
     Tone,
     card,
@@ -121,7 +121,11 @@ def _status_form(client: ApiClient, row: LeadRow, detail: LeadDetail) -> None:
         )
         note = st.text_area("Note (optional)", max_chars=MAX_NOTE_LENGTH, height=80)
         submitted = st.form_submit_button(
-            f"Update from {current.value.title()}", type="primary", icon=":material/sync_alt:"
+            f"Update from {current.value.title()}",
+            type="primary",
+            icon=":material/sync_alt:",
+            disabled=not can_write(),
+            help=None if can_write() else READ_ONLY_HELP,
         )
     if not submitted or target is None:
         return
@@ -181,7 +185,12 @@ def _drafts(client: ApiClient, row: LeadRow, detail: LeadDetail) -> None:
             list(DraftTemplate),
             format_func=TEMPLATE_LABELS.__getitem__,
         )
-        submitted = st.form_submit_button("Generate draft", icon=":material/edit_note:")
+        submitted = st.form_submit_button(
+            "Generate draft",
+            icon=":material/edit_note:",
+            disabled=not can_write(),
+            help=None if can_write() else READ_ONLY_HELP,
+        )
     if not submitted or template is None:
         return
     try:
@@ -236,11 +245,13 @@ def _ai_draft(client: ApiClient, row: LeadRow) -> None:
     st.button(
         "Draft with local AI",
         icon=":material/auto_awesome:",
-        disabled=busy,
+        disabled=busy or not can_write(),
         key=f"assist.button.{row.id}",
         on_click=_start_ai_request,
         args=(row.id, template_key),
-        help="A local model writes the message body. The draft waits for your review.",
+        help="A local model writes the message body. The draft waits for your review."
+        if can_write()
+        else READ_ONLY_HELP,
     )
     st.caption(f"Model: {escape_markdown(status.model or 'local model')}. {assist.AI_LIMITS_NOTE}")
 

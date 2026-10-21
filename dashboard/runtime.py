@@ -1,22 +1,76 @@
-"""Process-wide objects for the Streamlit app (one settings load, one HTTP session)."""
+"""Objects for the Streamlit app: one settings load and connection pool per process, and
+one signed-in API client per browser tab (M11)."""
 
+import contextlib
 from dataclasses import dataclass
 
 import streamlit as st
+from pydantic import SecretStr
 
-from dashboard.api_client import ApiClient, ApiError
+from dashboard import session
+from dashboard.api_client import NOT_SIGNED_IN, ApiClient, ApiError, ApiErrorKind
 from dashboard.config import ConfigError, load_settings
 from dashboard.leads import LeadSnapshot, fetch_lead_snapshot
 from dashboard.ui import escape_markdown
 
+READ_ONLY_HELP = "Your account can view data but not change it."
+
 
 @st.cache_resource(show_spinner=False)
 def get_client() -> ApiClient:
-    """Build the API client once. Raises ``ConfigError`` (not cached) if .env is incomplete.
+    """The shared client with **no** token (health and sign-in only), built once.
 
-    Restart the dashboard after editing .env.
+    Raises ``ConfigError`` (not cached) if .env is incomplete. Restart the dashboard
+    after editing .env. The service key in .env is never used here.
     """
     return ApiClient(load_settings())
+
+
+def current_user() -> session.SignedIn | None:
+    return session.current(st.session_state)
+
+
+def can_write() -> bool:
+    """True for admins. The API enforces this too; the dashboard only mirrors it."""
+    user = current_user()
+    return user is not None and user.can_write
+
+
+def sign_in(username: str, password: str) -> None:
+    """Sign this tab in, or raise ``ApiError``. The password is not kept anywhere."""
+    result = get_client().login(username, password)
+    session.begin(
+        st.session_state,
+        session.SignedIn(
+            token=SecretStr(result.token),
+            username=result.user.username,
+            role=result.user.role,
+            expires_at=result.expires_at,
+        ),
+    )
+
+
+def sign_out() -> None:
+    """End the session on the API (best effort) and forget the token in this tab."""
+    user = current_user()
+    if user is not None:
+        # Best effort: the token is forgotten either way, and expires on its own.
+        with contextlib.suppress(ApiError):
+            get_client().with_token(user.token).logout()
+    session.end(st.session_state, session.SIGNED_OUT)
+    clear_lead_data()
+
+
+def _session_ended() -> None:
+    session.end(st.session_state, session.SESSION_ENDED)
+
+
+def _signed_in_client() -> ApiClient:
+    """This tab's client, or ``ApiError(UNAUTHORIZED)`` if the tab is not signed in."""
+    user = current_user()
+    if user is None:
+        raise ApiError(ApiErrorKind.UNAUTHORIZED, NOT_SIGNED_IN)
+    return get_client().with_token(user.token, on_session_end=_session_ended)
 
 
 @dataclass(frozen=True)
@@ -37,9 +91,13 @@ def connection_status() -> ConnectionStatus:
 
 
 def require_client() -> ApiClient:
-    """Return the client, or show the configuration problem and stop this page."""
+    """This tab's signed-in client, or show the configuration problem and stop this page.
+
+    The app only shows pages to a signed-in tab, so "not signed in" here means the
+    session ended a moment ago: the next rerun shows the sign-in page.
+    """
     try:
-        return get_client()
+        get_client()
     except ConfigError as exc:
         st.error(
             "The dashboard configuration is incomplete:  \n"
@@ -48,6 +106,10 @@ def require_client() -> ApiClient:
             icon=":material/settings:",
         )
         st.stop()
+    try:
+        return _signed_in_client()
+    except ApiError:
+        st.rerun()
 
 
 @st.cache_data(ttl=60, show_spinner=False)
@@ -55,9 +117,11 @@ def lead_snapshot() -> LeadSnapshot:
     """Every lead with its status and score, cached for 60 s.
 
     Call ``clear_lead_data()`` after any change so the next read comes from the API.
-    A failed load raises ``ApiError`` and is not cached.
+    A failed load raises ``ApiError`` and is not cached. The cache is shared by every
+    signed-in tab of this dashboard process: both roles may read all leads, and only
+    signed-in tabs ever render it.
     """
-    return fetch_lead_snapshot(get_client())
+    return fetch_lead_snapshot(_signed_in_client())
 
 
 def clear_lead_data() -> None:

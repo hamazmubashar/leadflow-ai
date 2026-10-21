@@ -99,6 +99,26 @@ class DraftStatus(StrEnum):
 DraftGenerator = Literal["template", "local_llm"]
 
 
+class Role(StrEnum):
+    ADMIN = "admin"
+    VIEWER = "viewer"
+
+
+class UserInfo(_ApiModel):
+    """``GET /api/v1/auth/me`` and the ``user`` part of a login (M11)."""
+
+    username: str
+    role: Role
+
+
+class LoginResult(_ApiModel):
+    """``POST /api/v1/auth/login``. The token is shown once and kept only in memory."""
+
+    token: str
+    expires_at: datetime
+    user: UserInfo
+
+
 class AssistStatus(_ApiModel):
     """``GET /api/v1/assist/status``: whether AI-assisted drafts are configured (M9)."""
 

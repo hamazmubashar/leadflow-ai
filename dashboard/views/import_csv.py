@@ -13,7 +13,7 @@ from dashboard.imports import (
     ImportFailure,
     describe_import_error,
 )
-from dashboard.runtime import clear_lead_data, require_client
+from dashboard.runtime import READ_ONLY_HELP, can_write, clear_lead_data, require_client
 from dashboard.ui import ORANGE, SUCCESS, cell, escape_markdown, html_table, kpi_card, page_header
 
 _RESULT_KEY = "import.result"  # (file digest, imported count) of the last success
@@ -44,6 +44,10 @@ def render() -> None:
             width="stretch",
         )
 
+    if not can_write():
+        st.info(READ_ONLY_HELP, icon=":material/visibility:")
+        _show_last_result()
+        return
     upload = st.file_uploader("CSV file", type=["csv"], key="import.file")
     if upload is None:
         _show_last_result()

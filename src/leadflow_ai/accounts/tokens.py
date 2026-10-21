@@ -10,7 +10,7 @@ import secrets
 from datetime import timedelta
 
 SESSION_LIFETIME = timedelta(hours=8)
-MAX_FAILED_LOGINS = 5
+MAX_FAILED_LOGINS = 3
 LOCKOUT = timedelta(minutes=15)
 # Expired sessions are deleted at the next login once they're this old.
 EXPIRED_SESSION_RETENTION = timedelta(days=7)

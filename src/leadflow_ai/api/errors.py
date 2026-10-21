@@ -8,7 +8,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import OperationalError
 
-from leadflow_ai.api.login_limit import LoginRateLimitedError
+from leadflow_ai.api.login_limit import LoginRateLimitedError, SignInLockedError
 from leadflow_ai.assist import GenerationError, GenerationErrorCode
 from leadflow_ai.drafts import ELIGIBLE_LEAD_STATUSES
 from leadflow_ai.imports.csv_reader import CsvFileError
@@ -182,6 +182,21 @@ async def _login_rate_limited(request: Request, exc: Exception) -> JSONResponse:
         {
             "code": "auth.rate_limited",
             "message": "Too many sign-in attempts from this address; try again later",
+            "retry_after_seconds": retry_after,
+        },
+        **{"Retry-After": str(retry_after)},
+    )
+
+
+async def _sign_in_locked(request: Request, exc: Exception) -> JSONResponse:
+    # Same answer for every username, real or not: it reveals no account.
+    retry_after = cast(SignInLockedError, exc).retry_after_seconds
+    return _error(
+        429,
+        {
+            "code": "auth.locked",
+            "message": "Too many failed attempts. Sign-in is locked for 15 minutes.",
+            "retry_after_seconds": retry_after,
         },
         **{"Retry-After": str(retry_after)},
     )
@@ -316,4 +331,5 @@ def register_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(RunInProgressError, _workflow_run_in_progress)
     app.add_exception_handler(GenerationError, _generation_failed)
     app.add_exception_handler(LoginRateLimitedError, _login_rate_limited)
+    app.add_exception_handler(SignInLockedError, _sign_in_locked)
     app.add_exception_handler(OperationalError, _database_unavailable)

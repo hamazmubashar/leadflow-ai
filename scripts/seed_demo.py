@@ -52,10 +52,14 @@ DRAFTS: dict[str, DraftTemplate] = {
 
 def main() -> int:
     try:
-        client = ApiClient(load_settings())
+        settings = load_settings()
     except ConfigError as exc:
         print("Configuration problem:", "; ".join(exc.problems))
         return 1
+    if settings.operator_token is None:
+        print("Set LEADFLOW_OPERATOR_TOKEN (the API's service key) in .env to run this script.")
+        return 1
+    client = ApiClient(settings, token=settings.operator_token)
     try:
         leads = {lead.full_name: lead.id for lead in client.list_leads(limit=100).items}
     except ApiError as error:

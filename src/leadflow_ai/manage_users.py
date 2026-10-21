@@ -27,6 +27,8 @@ from leadflow_ai.db.session import create_session_factory
 from leadflow_ai.services.accounts import (
     DuplicateUsernameError,
     UnknownUserError,
+    check_manageable,
+    check_new_username,
     create_user,
     list_users,
     set_active,
@@ -60,12 +62,14 @@ def main(
 def _run(session: Session, args: argparse.Namespace, prompt: Prompt) -> int:
     try:
         if args.command == "create":
+            check_new_username(session, args.username)  # before asking for a password
             password = _new_password(prompt)
             if password is None:
                 return EXIT_USAGE
             user = create_user(session, args.username, password, Role(args.role))
             print(f"Created {user.role} account '{user.username}'.")
         elif args.command == "set-password":
+            check_manageable(session, args.username)  # before asking for a password
             password = _new_password(prompt)
             if password is None:
                 return EXIT_USAGE

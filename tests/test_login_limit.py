@@ -3,11 +3,15 @@
 import pytest
 
 from leadflow_ai.api.login_limit import (
+    LOCKOUT_FAILURES,
+    LOCKOUT_SECONDS,
     LOGIN_ATTEMPTS_PER_CLIENT,
     LOGIN_WINDOW_SECONDS,
     MAX_TRACKED_CLIENTS,
     LoginRateLimitedError,
     LoginRateLimiter,
+    SignInLockedError,
+    UsernameLockout,
 )
 
 
@@ -128,3 +132,100 @@ def test_when_full_of_active_addresses_the_least_recent_goes(clock: Clock) -> No
     assert limit.tracked_clients() == 2
     with pytest.raises(LoginRateLimitedError):
         limit.reserve("first")  # still tracked and still blocked
+
+
+# --- per-username lockout -------------------------------------------------------------------
+
+
+def lockout(clock: Clock) -> UsernameLockout:
+    return UsernameLockout(clock=clock, max_keys=100)
+
+
+def fail(lock: UsernameLockout, name: str = "alice") -> int | None:
+    lock.begin(name)
+    return lock.failed(name)
+
+
+def test_lockout_defaults() -> None:
+    assert (LOCKOUT_FAILURES, LOCKOUT_SECONDS) == (3, 900)
+
+
+def test_the_third_consecutive_failure_locks_for_15_minutes(clock: Clock) -> None:
+    lock = lockout(clock)
+    assert fail(lock) is None
+    assert fail(lock) is None
+    assert fail(lock) == 900  # the third failure itself reports the lock
+    clock.now += 60
+    with pytest.raises(SignInLockedError) as refused:
+        lock.begin("alice")
+    assert refused.value.retry_after_seconds == 840
+    lock.begin("bob")  # other names are unaffected
+
+
+def test_the_name_is_matched_as_typed_but_case_and_spaces_dont_matter(clock: Clock) -> None:
+    lock = lockout(clock)
+    for name in ("Alice", " alice ", "ALICE"):
+        fail(lock, name)
+    with pytest.raises(SignInLockedError):
+        lock.begin("alice")
+
+
+def test_the_lock_expires_and_the_count_starts_again(clock: Clock) -> None:
+    lock = lockout(clock)
+    for _ in range(3):
+        fail(lock)
+    clock.now += 900
+    assert fail(lock) is None  # expired: a fresh count
+    assert fail(lock) is None
+    assert fail(lock) == 900
+
+
+def test_a_success_resets_the_consecutive_count(clock: Clock) -> None:
+    lock = lockout(clock)
+    fail(lock)
+    fail(lock)
+    lock.begin("alice")
+    lock.succeeded("alice")
+    assert fail(lock) is None
+    assert fail(lock) is None
+
+
+def test_old_failures_are_forgotten(clock: Clock) -> None:
+    lock = lockout(clock)
+    fail(lock)
+    fail(lock)
+    clock.now += 901
+    assert fail(lock) is None
+
+
+def test_parallel_attempts_cannot_squeeze_in_a_fourth_guess(clock: Clock) -> None:
+    lock = lockout(clock)
+    fail(lock)
+    fail(lock)
+    lock.begin("alice")  # the third attempt is still being checked...
+    with pytest.raises(SignInLockedError):
+        lock.begin("alice")  # ...so a parallel fourth is refused at once
+    assert lock.failed("alice") == 900
+
+
+def test_an_abandoned_attempt_is_not_counted(clock: Clock) -> None:
+    lock = lockout(clock)
+    fail(lock)
+    fail(lock)
+    lock.begin("alice")
+    lock.abandoned("alice")
+    lock.abandoned("nobody")  # unknown names are ignored
+    assert fail(lock) == 900
+
+
+def test_idle_names_are_forgotten_first_when_full(clock: Clock) -> None:
+    lock = UsernameLockout(clock=clock, max_keys=2)
+    for _ in range(3):
+        fail(lock, "locked")
+    fail(lock, "idle")
+    clock.now += 901
+    lock.begin("busy")  # full: "idle" (expired) and "locked" (expired lock) are dropped
+    assert lock.tracked() == 1
+    lock.begin("other")
+    lock.begin("third")  # nothing idle: the least recently seen goes
+    assert lock.tracked() == 2

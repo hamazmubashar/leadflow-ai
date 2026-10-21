@@ -14,7 +14,13 @@ from dashboard.leads import (
     filter_rows,
 )
 from dashboard.models import LeadSource, LeadStatus, Tier
-from dashboard.runtime import clear_lead_data, lead_snapshot, require_client
+from dashboard.runtime import (
+    READ_ONLY_HELP,
+    can_write,
+    clear_lead_data,
+    lead_snapshot,
+    require_client,
+)
 from dashboard.ui import (
     page_header,
     set_flash,
@@ -141,7 +147,13 @@ def _create_form(client: ApiClient) -> None:
             format_func=SOURCE_LABELS.__getitem__,
         )
         notes = st.text_area("Notes", max_chars=1000, height=80)
-        submitted = st.form_submit_button("Create lead", type="primary", icon=":material/add:")
+        submitted = st.form_submit_button(
+            "Create lead",
+            type="primary",
+            icon=":material/add:",
+            disabled=not can_write(),
+            help=None if can_write() else READ_ONLY_HELP,
+        )
 
     if not submitted:
         return

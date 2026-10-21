@@ -1,4 +1,4 @@
-"""System Health: is the API reachable, and does it accept the configured token?"""
+"""System Health: is the API reachable, and does it accept this tab's sign-in session?"""
 
 import time
 
@@ -6,7 +6,7 @@ import streamlit as st
 
 from dashboard.api_client import ApiError
 from dashboard.config import ConfigError
-from dashboard.runtime import connection_status, get_client
+from dashboard.runtime import connection_status, current_user, get_client, require_client
 from dashboard.ui import Tone, card, escape_markdown, page_header, pill, show_api_error, text_card
 
 
@@ -52,16 +52,21 @@ def render() -> None:
             reachable = True
 
     with right:
-        st.subheader("Authentication")
-        card("Operator token", pill("Configured (hidden)", Tone.NEUTRAL))
+        st.subheader("Your session")
+        user = current_user()
+        if user is not None:
+            text_card("Signed in as", f"{user.username} ({user.role.value})")
+            text_card("Session ends", user.expires_at.astimezone().strftime("%Y-%m-%d %H:%M"))
         if not reachable:
-            card("Token check", pill("Skipped: API check failed", Tone.NEUTRAL))
+            card("Session check", pill("Skipped: API check failed", Tone.NEUTRAL))
             return
+        signed_in = require_client()
         try:
-            client.check_auth()
+            signed_in.me()
+            signed_in.check_auth()
         except ApiError as error:
-            card("Token check", pill("Failed", Tone.DANGER))
+            card("Session check", pill("Failed", Tone.DANGER))
             show_api_error(error)
         else:
-            card("Token check", pill("Accepted", Tone.SUCCESS))
+            card("Session check", pill("Accepted", Tone.SUCCESS))
             card("Database", pill("Readable by the API", Tone.SUCCESS))

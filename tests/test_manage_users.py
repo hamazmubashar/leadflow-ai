@@ -96,6 +96,28 @@ def test_duplicate(settings: DatabaseSettings, capsys: pytest.CaptureFixture[str
     assert "already exists" in capsys.readouterr().err
 
 
+def _no_prompt(_prompt: str) -> str:
+    raise AssertionError("asked for a password")
+
+
+@pytest.mark.parametrize(
+    ("argv", "message"),
+    [
+        (["create", "ALICE", "--role", "viewer"], "already exists"),
+        (["create", "system", "--role", "admin"], "reserved"),
+        (["create", "x", "--role", "admin"], "sername"),
+        (["set-password", "nobody"], "no such account"),
+        (["set-password", "system"], "no such account"),
+    ],
+)
+def test_bad_usernames_are_refused_before_any_password_prompt(
+    settings: DatabaseSettings, capsys: pytest.CaptureFixture[str], argv: list[str], message: str
+) -> None:
+    run(settings, "create", "alice", "--role", "admin")
+    assert run(settings, *argv, prompt=_no_prompt) in (EXIT_ERROR, EXIT_USAGE)
+    assert message in capsys.readouterr().err
+
+
 def test_an_unmigrated_database_is_explained(
     database_url: str, capsys: pytest.CaptureFixture[str]
 ) -> None:

@@ -12,7 +12,13 @@ from dashboard import nav
 from dashboard.api_client import ApiClient, ApiError
 from dashboard.models import RunMode, WorkflowRun
 from dashboard.overview import time_ago
-from dashboard.runtime import clear_lead_data, lead_snapshot, require_client
+from dashboard.runtime import (
+    READ_ONLY_HELP,
+    can_write,
+    clear_lead_data,
+    lead_snapshot,
+    require_client,
+)
 from dashboard.ui import (
     Tone,
     card,
@@ -81,6 +87,9 @@ def render() -> None:
 def _actions(client: ApiClient) -> None:
     st.markdown("**Start a run**")
     st.caption("Preview shows what a live run would do and creates nothing.")
+    if not can_write():
+        st.caption(READ_ONLY_HELP)
+        return
     if st.button("Preview", icon=":material/visibility:", width="stretch", key="wf.preview"):
         _start(client, "preview")
     confirmed = st.checkbox(

@@ -18,7 +18,12 @@ import streamlit as st  # noqa: E402
 
 from dashboard import nav, ui  # noqa: E402
 from dashboard.config import ConfigError  # noqa: E402
-from dashboard.runtime import connection_status  # noqa: E402
+from dashboard.runtime import (  # noqa: E402
+    READ_ONLY_HELP,
+    connection_status,
+    current_user,
+    sign_out,
+)
 from dashboard.views import (  # noqa: E402
     activity,
     dashboard,
@@ -28,6 +33,7 @@ from dashboard.views import (  # noqa: E402
     leads,
     outbox,
     scoring,
+    sign_in,
     workflows,
 )
 
@@ -38,6 +44,23 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 ui.apply_theme()
+
+# M11: nothing but the sign-in page until this tab has a session.
+user = current_user()
+if user is None:
+    st.navigation(
+        [
+            st.Page(
+                sign_in.render,
+                title="Sign in",
+                icon=":material/login:",
+                url_path="sign-in",
+                default=True,
+            )
+        ],
+        position="hidden",
+    ).run()
+    st.stop()
 
 # Sidebar order follows the M7 design: one page per workflow step.
 pages = {
@@ -86,5 +109,17 @@ with st.sidebar:
     st.divider()
     for page in pages.values():
         st.page_link(page)
+    st.divider()
+    role_tone = ui.Tone.SUCCESS if user.can_write else ui.Tone.NEUTRAL
+    st.markdown(
+        f"{ui.escape_markdown(user.username)} &nbsp;{ui.pill(user.role.value, role_tone)}",
+        unsafe_allow_html=True,
+    )
+    if st.button("Sign out", icon=":material/logout:", width="stretch", key="auth.sign_out"):
+        sign_out()
+        st.rerun()
+
+if not user.can_write:
+    st.info(f"Read-only access. {READ_ONLY_HELP}", icon=":material/visibility:")
 
 navigation.run()

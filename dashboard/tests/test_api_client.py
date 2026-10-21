@@ -10,6 +10,9 @@ from pydantic import SecretStr
 from dashboard.api_client import (
     AI_DRAFT_READ_TIMEOUT_SECONDS,
     CONNECT_TIMEOUT_SECONDS,
+    NOT_SIGNED_IN,
+    SESSION_REJECTED,
+    SIGN_IN_FAILED,
     ApiClient,
     ApiError,
     ApiErrorKind,
@@ -18,7 +21,7 @@ from dashboard.api_client import (
     JsonObject,
 )
 from dashboard.config import DashboardSettings
-from dashboard.models import DraftStatus, DraftTemplate, LeadStatus
+from dashboard.models import DraftStatus, DraftTemplate, LeadStatus, Role
 
 TOKEN = "client-test-token-" + "y" * 24
 BASE = "http://127.0.0.1:8000"
@@ -73,12 +76,17 @@ class FakeSession:
         return self.outcome
 
 
-def client_for(outcome: FakeResponse | Exception) -> tuple[ApiClient, FakeSession]:
+SETTINGS = DashboardSettings(_env_file=None, api_url=BASE, request_timeout_seconds=7)
+
+
+def client_for(
+    outcome: FakeResponse | Exception, *, on_session_end: Callable[[], None] | None = None
+) -> tuple[ApiClient, FakeSession]:
     session = FakeSession(outcome)
-    settings = DashboardSettings(
-        api_url=BASE, operator_token=SecretStr(TOKEN), request_timeout_seconds=7
+    client = ApiClient(
+        SETTINGS, session=session, token=SecretStr(TOKEN), on_session_end=on_session_end
     )
-    return ApiClient(settings, session=session), session
+    return client, session
 
 
 def raised(client_call: Callable[[], object]) -> ApiError:
@@ -149,7 +157,7 @@ def test_wrong_token_is_an_authentication_failure_without_the_token() -> None:
     assert error.kind is ApiErrorKind.UNAUTHORIZED
     assert error.status_code == 401
     assert TOKEN not in error.message
-    assert "LEADFLOW_OPERATOR_TOKEN" in error.message
+    assert error.message == SESSION_REJECTED
 
 
 def test_api_error_body_supplies_code_message_and_detail() -> None:
@@ -581,3 +589,103 @@ def test_llm_errors_keep_only_code_and_fixed_message() -> None:
     client, _ = client_for(respond(504, body))
     error = raised(lambda: client.create_ai_draft("x", DraftTemplate.INTRODUCTION))
     assert (error.status_code, error.code) == (504, "llm.timeout")
+
+
+# --- sign-in (M11) -----------------------------------------------------------------------
+
+LOGIN_BODY = {
+    "token": "session-token-" + "z" * 30,
+    "token_type": "bearer",
+    "expires_at": "2026-10-21T16:00:00Z",
+    "user": {"username": "hamaz", "role": "admin"},
+}
+
+
+def test_login_sends_no_token_and_returns_the_session() -> None:
+    client, session = client_for(respond(200, LOGIN_BODY))
+    result = client.login("hamaz", "a long passphrase")
+    assert (result.token, result.user.username, result.user.role) == (
+        LOGIN_BODY["token"],
+        "hamaz",
+        Role.ADMIN,
+    )
+    call = session.calls[0]
+    assert (call["method"], call["url"]) == ("POST", f"{BASE}/api/v1/auth/login")
+    assert call["json"] == {"username": "hamaz", "password": "a long passphrase"}
+    assert "Authorization" not in call["headers"]
+
+
+def test_a_refused_login_has_one_message_and_does_not_end_a_session() -> None:
+    ended: list[bool] = []
+    body = {"detail": {"code": "auth.invalid_credentials", "message": "Invalid username"}}
+    client, _ = client_for(respond(401, body), on_session_end=lambda: ended.append(True))
+    error = raised(lambda: client.login("hamaz", "Pa55-secret-xyz"))
+    assert (error.kind, error.code, error.message) == (
+        ApiErrorKind.HTTP_ERROR,
+        "auth.invalid_credentials",
+        SIGN_IN_FAILED,
+    )
+    assert "Pa55-secret-xyz" not in error.message
+    assert ended == []
+
+
+def test_a_rate_limited_login_shows_the_api_message() -> None:
+    detail = {"code": "auth.rate_limited", "message": "Too many sign-in attempts"}
+    client, _ = client_for(respond(429, {"detail": detail}))
+    error = raised(lambda: client.login("hamaz", "x"))
+    assert (error.status_code, error.code, error.message) == (
+        429,
+        "auth.rate_limited",
+        "Too many sign-in attempts",
+    )
+
+
+def test_other_login_failures_pass_through() -> None:
+    client, _ = client_for(requests.ConnectionError("down"))
+    assert raised(lambda: client.login("hamaz", "x")).is_transport_failure
+
+
+def test_logout_accepts_204_and_me_reads_the_account() -> None:
+    client, session = client_for(FakeResponse(204))
+    client.logout()  # 204 No Content is success
+    assert session.calls[0]["url"] == f"{BASE}/api/v1/auth/logout"
+    assert session.calls[0]["headers"]["Authorization"] == f"Bearer {TOKEN}"
+    me, _ = client_for(respond(200, {"username": "demo", "role": "viewer"}))
+    assert me.me().role is Role.VIEWER
+
+
+def test_a_rejected_token_ends_the_session_once() -> None:
+    ended: list[bool] = []
+    client, _ = client_for(
+        respond(401, {"detail": "Invalid or missing bearer token"}),
+        on_session_end=lambda: ended.append(True),
+    )
+    assert raised(client.check_auth).message == SESSION_REJECTED
+    assert ended == [True]
+
+
+def test_other_errors_do_not_end_the_session() -> None:
+    ended: list[bool] = []
+    detail = {"code": "auth.forbidden", "message": "Your account can view data but not change it"}
+    client, _ = client_for(
+        respond(403, {"detail": detail}), on_session_end=lambda: ended.append(True)
+    )
+    assert raised(lambda: client.create_lead({"full_name": "A"})).code == "auth.forbidden"
+    assert ended == []
+
+
+def test_without_a_token_nothing_is_sent() -> None:
+    session = FakeSession(respond(200, {}))
+    client = ApiClient(SETTINGS, session=session)
+    error = raised(client.check_auth)
+    assert (error.kind, error.message) == (ApiErrorKind.UNAUTHORIZED, NOT_SIGNED_IN)
+    assert session.calls == []
+
+
+def test_with_token_shares_the_connection_pool() -> None:
+    session = FakeSession(respond(200, {"username": "demo", "role": "viewer"}))
+    anonymous = ApiClient(SETTINGS, session=session)
+    signed_in = anonymous.with_token(SecretStr("other-" + "t" * 30))
+    signed_in.me()
+    assert session.calls[0]["headers"]["Authorization"] == "Bearer other-" + "t" * 30
+    assert signed_in.base_url == anonymous.base_url

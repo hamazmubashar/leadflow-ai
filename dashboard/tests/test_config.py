@@ -11,6 +11,7 @@ def test_defaults_and_token_from_environment(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setenv("LEADFLOW_OPERATOR_TOKEN", TOKEN)
     settings = load_settings()
     assert settings.api_url == DEFAULT_API_URL
+    assert settings.operator_token is not None
     assert settings.operator_token.get_secret_value() == TOKEN
     assert settings.request_timeout_seconds == 10.0
 
@@ -30,21 +31,20 @@ def test_reads_dotenv_in_working_directory(isolated_environment: Path) -> None:
         encoding="utf-8",
     )
     settings = load_settings()
+    assert settings.operator_token is not None
     assert settings.operator_token.get_secret_value() == TOKEN
     assert settings.api_url == "http://localhost:8001"  # trailing slash removed
 
 
-def test_missing_token_names_the_variable() -> None:
-    with pytest.raises(ConfigError) as caught:
-        load_settings()
-    assert caught.value.problems == ["LEADFLOW_OPERATOR_TOKEN is not set (add it to .env)"]
+def test_the_service_key_is_optional() -> None:
+    # M11: the dashboard signs people in; only scripts use the service key.
+    assert load_settings().operator_token is None
 
 
-def test_blank_token_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LEADFLOW_OPERATOR_TOKEN", "   ")
-    with pytest.raises(ConfigError) as caught:
-        load_settings()
-    assert caught.value.problems[0].startswith("LEADFLOW_OPERATOR_TOKEN is invalid")
+@pytest.mark.parametrize("value", ["", "   "])
+def test_a_blank_service_key_means_none(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+    monkeypatch.setenv("LEADFLOW_OPERATOR_TOKEN", value)
+    assert load_settings().operator_token is None
 
 
 @pytest.mark.parametrize(

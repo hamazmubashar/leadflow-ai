@@ -2,7 +2,12 @@
 
 ``POST /api/v1/auth/login`` is the only API route that accepts a request without a
 bearer token. Its checks run in this order: body size (413, middleware) -> per-address
-rate limit (429) -> content type (415) -> body shape (422) -> credentials (401).
+rate limit (429 ``auth.rate_limited``) -> content type (415) -> body shape (422) ->
+per-username lockout (429 ``auth.locked``) -> credentials (401).
+
+Lockout: the third consecutive failure for a username (real or not) answers
+``429 auth.locked`` with ``Retry-After`` and ``retry_after_seconds``, and every attempt
+for that name is refused the same way for 15 minutes, without checking the password.
 
 Every failed login gets the same ``401 auth.invalid_credentials`` whatever the reason
 (unknown user, wrong password, deactivated or locked account), and the response never
@@ -19,7 +24,7 @@ from pydantic import BaseModel
 
 from leadflow_ai.accounts import Role
 from leadflow_ai.api.deps import PublicJsonObjectBody, SessionDep
-from leadflow_ai.api.login_limit import LoginRateLimiter
+from leadflow_ai.api.login_limit import LoginRateLimiter, SignInLockedError, UsernameLockout
 from leadflow_ai.auth import BearerCredentials, CurrentUser
 from leadflow_ai.services.accounts import InvalidCredentialsError, login, logout
 
@@ -51,6 +56,14 @@ def get_login_limiter(request: Request) -> LoginRateLimiter:
 
 
 LimiterDep = Annotated[LoginRateLimiter, Depends(get_login_limiter)]
+
+
+def get_username_lockout(request: Request) -> UsernameLockout:
+    lockout: UsernameLockout = request.app.state.username_lockout
+    return lockout
+
+
+LockoutDep = Annotated[UsernameLockout, Depends(get_username_lockout)]
 
 
 def client_address(request: Request) -> str:
@@ -121,13 +134,22 @@ def sign_in(
     payload: PublicJsonObjectBody,
     session: SessionDep,
     limiter: LimiterDep,
+    lockout: LockoutDep,
     response: Response,
 ) -> LoginOut:
     username, password = _credentials(payload)
+    lockout.begin(username)  # raises SignInLockedError while locked; no password work
     try:
         result = login(session, username, password)
     except InvalidCredentialsError:
+        locked_for = lockout.failed(username)
+        if locked_for is not None:  # this failure was the third in a row
+            raise SignInLockedError(locked_for) from None
         raise _invalid_credentials() from None
+    except BaseException:
+        lockout.abandoned(username)  # e.g. database unavailable: no answer, not counted
+        raise
+    lockout.succeeded(username)
     limiter.release(client_address(request), stamp)
     response.headers["Cache-Control"] = "no-store"
     return LoginOut(

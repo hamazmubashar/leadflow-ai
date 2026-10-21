@@ -6,13 +6,14 @@ Exception details (which may contain URLs or payloads) are dropped, and nothing 
 logged.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Protocol
 from urllib.parse import quote
 
 import requests
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, SecretStr, ValidationError
 
 from dashboard.config import DashboardSettings
 from dashboard.models import (
@@ -26,11 +27,13 @@ from dashboard.models import (
     Lead,
     LeadPage,
     LeadStatus,
+    LoginResult,
     OutboxMessage,
     OutboxPage,
     RunMode,
     Score,
     StatusChange,
+    UserInfo,
     WorkflowRun,
     WorkflowRunItemPage,
     WorkflowRunPage,
@@ -40,6 +43,17 @@ CONNECT_TIMEOUT_SECONDS = 3.05
 MAX_PAGE_LIMIT = 100  # the API's maximum ``limit`` for every list endpoint
 WORKFLOW_START_PATH = "/api/v1/workflows/new-lead-outreach/runs"
 ASSIST_STATUS_PATH = "/api/v1/assist/status"
+LOGIN_PATH = "/api/v1/auth/login"
+LOGOUT_PATH = "/api/v1/auth/logout"
+ME_PATH = "/api/v1/auth/me"
+NOT_SIGNED_IN = "You are not signed in."
+SESSION_REJECTED = (
+    "Your session has ended (signed out, older than 8 hours, or the password or account "
+    "changed). Please sign in again."
+)
+# Deliberately the same for every refusal (wrong password, unknown, locked, deactivated):
+# the API never reveals which, so neither does the dashboard.
+SIGN_IN_FAILED = "Incorrect username or password."
 # An AI draft can take a minute or more on a laptop; the API's own model timeout is
 # LEADFLOW_LLM_TIMEOUT_SECONDS (120 by default, at most 300). Wait a little longer than
 # that maximum, so the API, not the dashboard, decides when generation has failed.
@@ -119,11 +133,33 @@ class HttpSession(Protocol):
 
 
 class ApiClient:
-    def __init__(self, settings: DashboardSettings, session: HttpSession | None = None) -> None:
+    """One API caller. ``token`` is a sign-in session token or, for scripts, the service key.
+
+    Without a token only ``health`` and ``login`` work; any other call fails at once with
+    ``UNAUTHORIZED`` and sends nothing. When the API rejects the token,
+    ``on_session_end`` runs (the dashboard uses it to sign the tab out).
+    """
+
+    def __init__(
+        self,
+        settings: DashboardSettings,
+        session: HttpSession | None = None,
+        *,
+        token: SecretStr | None = None,
+        on_session_end: Callable[[], None] | None = None,
+    ) -> None:
+        self._settings = settings
         self._base_url = settings.api_url
-        self._token = settings.operator_token
+        self._token = token
+        self._on_session_end = on_session_end
         self._timeout = (CONNECT_TIMEOUT_SECONDS, settings.request_timeout_seconds)
         self._session: HttpSession = session if session is not None else requests.Session()
+
+    def with_token(
+        self, token: SecretStr, *, on_session_end: Callable[[], None] | None = None
+    ) -> "ApiClient":
+        """A client for one signed-in person, sharing this client's connection pool."""
+        return ApiClient(self._settings, self._session, token=token, on_session_end=on_session_end)
 
     @property
     def base_url(self) -> str:
@@ -150,6 +186,31 @@ class ApiClient:
         if not isinstance(status, str) or not isinstance(version, str):
             raise _invalid_response()
         return Health(status=status, version=version)
+
+    def login(self, username: str, password: str) -> LoginResult:
+        """``POST /api/v1/auth/login``. Every refusal gets the same message, as in the API."""
+        try:
+            body = self._request(
+                "POST", LOGIN_PATH, auth=False, json={"username": username, "password": password}
+            )
+        except ApiError as error:
+            if error.status_code == 401:
+                raise ApiError(
+                    ApiErrorKind.HTTP_ERROR,
+                    SIGN_IN_FAILED,
+                    status_code=401,
+                    code="auth.invalid_credentials",
+                ) from None
+            raise
+        return _validate(LoginResult, body)
+
+    def logout(self) -> None:
+        """``POST /api/v1/auth/logout``: the token stops working at once."""
+        self._request("POST", LOGOUT_PATH)
+
+    def me(self) -> UserInfo:
+        """``GET /api/v1/auth/me``: the account behind the token, and its role."""
+        return _validate(UserInfo, self._request("GET", ME_PATH))
 
     def check_auth(self) -> None:
         """Make the cheapest authenticated read; raises ``ApiError`` if it fails.
@@ -319,6 +380,8 @@ class ApiClient:
         if content_type is not None:
             headers["Content-Type"] = content_type
         if auth:
+            if self._token is None:
+                raise ApiError(ApiErrorKind.UNAUTHORIZED, NOT_SIGNED_IN)
             headers["Authorization"] = f"Bearer {self._token.get_secret_value()}"
         try:
             response = self._session.request(
@@ -343,7 +406,12 @@ class ApiClient:
                 ApiErrorKind.UNREACHABLE,
                 f"Cannot reach the LeadFlow API at {self._base_url}. Is the server running?",
             ) from None
-        return _parse(response)
+        try:
+            return _parse(response)
+        except ApiError as error:
+            if auth and error.kind is ApiErrorKind.UNAUTHORIZED and self._on_session_end:
+                self._on_session_end()
+            raise
 
 
 def _parse(response: HttpResponse) -> JsonObject:
@@ -353,18 +421,15 @@ def _parse(response: HttpResponse) -> JsonObject:
     except ValueError:
         body = None
 
+    if status == 204:  # No Content (logout)
+        return {}
     if 200 <= status < 300:
         if not isinstance(body, dict):
             raise _invalid_response(status)
         return body
 
     if status == 401:
-        raise ApiError(
-            ApiErrorKind.UNAUTHORIZED,
-            "Authentication failed: the API rejected the operator token. "
-            "Check LEADFLOW_OPERATOR_TOKEN in .env matches the API's token.",
-            status_code=status,
-        )
+        raise ApiError(ApiErrorKind.UNAUTHORIZED, SESSION_REJECTED, status_code=status)
 
     detail = body.get("detail") if isinstance(body, dict) else None
     if isinstance(detail, dict):

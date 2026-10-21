@@ -110,6 +110,28 @@ def create_user(
     return record
 
 
+def check_new_username(session: Session, username: str) -> str:
+    """The normalized name, if it is valid, not reserved and free; reads only.
+
+    Lets the command line refuse a bad or taken name *before* asking for a password.
+    ``create_user`` still re-checks (two people could pick the same name meanwhile).
+    """
+    name = normalize_username(username)
+    if name in RESERVED_USERNAMES:
+        raise AccountRuleError("This username is reserved")
+    taken = session.scalar(select(UserRecord.id).where(UserRecord.username == name))
+    session.rollback()  # no read transaction is held while someone types a password
+    if taken is not None:
+        raise DuplicateUsernameError
+    return name
+
+
+def check_manageable(session: Session, username: str) -> None:
+    """Raise UnknownUserError unless the account exists and isn't ``system``; reads only."""
+    _managed_user(session, username)
+    session.rollback()
+
+
 def set_password(
     session: Session, username: str, password: str, *, now: datetime | None = None
 ) -> None:
