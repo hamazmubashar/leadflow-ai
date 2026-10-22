@@ -2,24 +2,24 @@ full_name,email,phone,company,source,notes
 Olivia Bennett,olivia.bennett@example.com,+44 7700 900201,Bennett & Bloom Boutique,web_form,Wants linen bedding samples for a spring window display
 Marcus Reid,marcus.reid@example.com,,The Saltmarsh Hotel,referral,40-room refurbishment; asked for trade pricing on towels
 Priya Kapoor,priya.kapoor@example.org,+44 7700 900203,Kapoor Interiors,event,Met at the Interiors Trade Show; residential projects
-Tom Hargreaves,tom.hargreaves@example.com,,Hargreaves Property Group,web_form,Furnishing show homes in a new development
+Tom Hargreaves,tom.hargreaves@example.com,,Hargreaves Property Group,other,Furnishing show homes in a new development
 Amelia Clarke,amelia.clarke@example.net,+44 7700 900205,Clarke & Co Cafe,referral,Tableware for two cafes; prefers stoneware
-Ethan Moss,ethan.moss@example.com,,Mossgrove Lodge,event,Boutique lodge; lighting and throws
-Sophie Turner,sophie.turner@example.com,+44 7700 900207,Turner Living,web_form,Online home store; asked about dropshipping
+Ethan Moss,ethan.moss@example.com,,Mossgrove Lodge,other,Boutique lodge; lighting and throws
+Sophie Turner,sophie.turner@example.com,,Turner Living,other,Online home store; asked about dropshipping
 Liam O'Connor,liam.oconnor@example.org,,Harbourview Apartments,import,Serviced apartments; bulk bedding
 Grace Whitfield,grace.whitfield@example.com,+44 7700 900209,Whitfield Design Studio,referral,Interior designer; wants the lighting catalogue
-Noah Patel,noah.patel@example.com,,Patel Home Store,web_form,Independent store; small first order
-Isla Morgan,isla.morgan@example.net,+44 7700 900211,The Morgan Inn,event,Pub with rooms; tableware and bedding
+Noah Patel,,+44 7700 900299,Patel Home Store,import,Independent store; small first order
+Isla Morgan,isla.morgan@example.net,,The Morgan Inn,import,Pub with rooms; tableware and bedding
 Jack Robinson,jack.robinson@example.com,,Robinson Office Fitouts,other,Office breakout areas; cushions and rugs
-Chloe Evans,chloe.evans@example.com,+44 7700 900213,Evans & Daughters Gifts,web_form,Gift shop; seasonal decor
+Chloe Evans,,+44 7700 900213,Evans & Daughters Gifts,other,Gift shop; seasonal decor
 Henry Walsh,henry.walsh@example.org,,Walsh Holiday Lets,referral,Eight holiday cottages; full linen sets
 Mia Thompson,mia.thompson@example.com,+44 7700 900215,Thompson Wellness Retreat,event,Spa towels and robes
 Oscar Hughes,oscar.hughes@example.com,,Hughes Furniture Gallery,import,Furniture showroom; styling accessories
-Ella Shaw,ella.shaw@example.net,+44 7700 900217,Shaw Student Living,web_form,Student rooms; budget bedding packs
+Ella Shaw,,+44 7700 900217,Shaw Student Living,import,Student rooms; budget bedding packs
 Leo Fraser,leo.fraser@example.com,,Fraser Restaurant Group,referral,Three restaurants; glassware and table linen
-Ruby Lawson,ruby.lawson@example.com,+44 7700 900219,Lawson Lifestyle Concept Store,event,Concept store; small-batch ceramics
+Ruby Lawson,ruby.lawson@example.com,,Lawson Lifestyle Concept Store,import,Concept store; small-batch ceramics
 Samuel King,samuel.king@example.org,,Kingsbridge Care Homes,other,Care homes; durable bedding
-Freya Dalton,freya.dalton@example.com,+44 7700 900221,Dalton Event Hire,web_form,Event hire; tableware in large quantities
+Freya Dalton,,+44 7700 900221,,web_form,Event hire; tableware in large quantities
 Arthur Price,arthur.price@example.com,,Price Coastal Cottages,import,Coastal cottages; chose another supplier last year
-Zara Ahmed,zara.ahmed@example.net,+44 7700 900223,Ahmed Home & Gift,referral,Family-run store; wants a trade account
-William Cole,william.cole@example.com,,Cole Boutique Hotels,event,Two boutique hotels; lighting refresh
+Zara Ahmed,,+44 7700 900223,Ahmed Home & Gift,other,Family-run store; wants a trade account
+William Cole,william.cole@example.com,,Cole Boutique Hotels,import,Two boutique hotels; lighting refresh

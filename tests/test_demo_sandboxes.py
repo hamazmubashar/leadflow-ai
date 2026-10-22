@@ -3,6 +3,7 @@
 import re
 import sqlite3
 import time
+from collections import Counter
 from collections.abc import Iterator
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
@@ -123,7 +124,14 @@ def test_the_sandbox_holds_the_harborline_story(api: TestClient) -> None:
     headers = bearer(start(api)["token"])
     items = leads(api, headers)
     assert len(items) == HARBORLINE_LEADS
-    assert all(re.search(r"@example\.(com|org|net)$", item["email"]) for item in items)
+    emails = [item["email"] for item in items if item["email"]]
+    assert all(re.search(r"@example\.(com|org|net)$", email) for email in emails)
+    phones = [item["phone"] for item in items if item["phone"]]
+    assert all(phone.startswith("+447700900") for phone in phones)  # fictional (Ofcom) range
+    tiers = Counter(
+        api.get(f"{LEADS}/{item['id']}/score", headers=headers).json()["tier"] for item in items
+    )
+    assert tiers == {"hot": 8, "warm": 11, "cold": 5}  # a realistic mix, not all hot
     outbox = api.get("/api/v1/outbox", headers=headers).json()["items"]
     assert len(outbox) == len(APPROVED)
     pending = [

@@ -2,13 +2,16 @@
 
 A local-first lead management system for small sales teams: capture and validate leads, import them from CSV, score and prioritise them, track each lead through its lifecycle, and prepare outreach drafts that a person reviews before anything happens. It comes with a REST API, an operator dashboard and an optional AI assistant that runs entirely on your own machine.
 
+**Live demo:** <https://leadflow-hamaz.duckdns.org>. Choose **Explore the live demo**: no account needed. You get a private copy of fictional data for 2 hours, and it is deleted afterwards.
+
 **What this project demonstrates**
 
 - **Workflow automation with a human in the loop.** A versioned outreach workflow prepares drafts automatically, but only a person can approve them, and approval records a *simulated* send. Nothing is ever emailed.
 - **Data integrity enforced by the database**, not just the code: Alembic migrations, CHECK constraints, partial unique indexes and triggers that make drafts and the outbox immutable and stop duplicates, even under concurrent requests.
 - **Responsible use of AI.** Optional draft writing with a local model (Ollama), restricted to loopback, with prompt-injection-aware prompting, deterministic output checks, permanent provenance and a visible review warning. Its limits are documented, not hidden.
 - **Accounts and access control.** Password sign-in (scrypt hashes), 8-hour sessions, admin and viewer roles checked centrally on every API route, a 3-attempt sign-in lockout with a live countdown, and an audit trail recording who made each change.
-- **Privacy by design.** No personal data in errors or logs, and everything bound to `127.0.0.1`.
+- **Privacy by design.** No personal data in errors or logs. Locally everything is bound to `127.0.0.1`; on a server only the HTTPS proxy is exposed.
+- **Production deployment at zero cost.** Docker (non-root, read-only containers), automatic HTTPS with Caddy, security headers, nightly backups, and a public demo where each visitor gets a private, disposable sandbox.
 - **Engineering quality.** Strict mypy, Ruff, a large automated test suite with full line and branch coverage of the backend, CI on every push, and an architecture decision record for every milestone.
 
 ## Quickstart
@@ -77,8 +80,9 @@ All screenshots use the fictional demo data.
 - **M9, AI-assisted drafts (optional, off by default):** a local model running on your own machine (Ollama) writes the body of a draft from the lead's details and notes. The draft still waits for a person to approve or reject it.
 - **M10, portfolio readiness:** client-facing documentation, architecture overview, a fresh-clone quickstart, screenshots, a security and privacy review, and an MIT license.
 - **M11, accounts and access control:** personal accounts with admin and viewer roles, password sign-in with 8-hour sessions, a 3-attempt lockout, a per-address rate limit, a dashboard sign-in page with a read-only view for viewers, and an audit trail recording who made each change.
+- **M12, public deployment:** a no-password live demo (a private copy of fictional data per visitor, deleted after 2 hours), Docker Compose with Caddy HTTPS, nightly backups, a one-time server setup script, and a free deployment on Oracle Cloud. The sign-in page gained a password-help panel and a developer credit.
 
-Everything runs on your machine, and it uses no paid services or external APIs. There's no machine learning; the only language model is the optional local one (M9), which is reached on `localhost` only.
+It runs on your machine or on one small server, and it uses no paid services or external APIs. There's no machine learning; the only language model is the optional local one (M9), which is reached on `localhost` only.
 
 > **LeadFlow AI does not send anything.** No emails, SMS, or other messages are ever sent. M6's outbox is **simulated**: approving a draft only records that it *would* be sent. There's no sending code, mail server setting, or delivery worker, and nothing contacts an external service.
 
@@ -681,6 +685,26 @@ Most errors have the form `{"detail": {"code": "...", ...}}`. Depending on the e
 **Before you migrate:** the first lead request against a database file that doesn't exist yet creates an empty `leadflow.db` (plus `-wal` and `-shm` files) and returns `database.not_migrated`. Running the migration then fixes it in place.
 
 **Logging:** the app doesn't log these `503`s; uvicorn's access log still records the status code.
+
+## Deploy to a server (M12)
+
+The whole stack runs with Docker Compose: `api`, `dashboard`, `backup` (nightly SQLite copies, keeps 7) and `caddy` (HTTPS, the only service exposed). Tested on Oracle Cloud's Always Free tier; any Ubuntu 24.04 server with Docker works the same way.
+
+1. **Server:** Ubuntu 24.04 (Oracle: shape `VM.Standard.A1.Flex`, labelled *Always Free-eligible*), a public IPv4 address, and inbound TCP 80 and 443 allowed in the cloud firewall (Oracle: the subnet's security list).
+2. **Domain:** point a name at the server's IP address, for example a free [DuckDNS](https://www.duckdns.org) subdomain.
+3. **Copy the code** from your computer:
+   ```sh
+   git archive --format=tar.gz -o /tmp/leadflow.tar.gz HEAD
+   scp /tmp/leadflow.tar.gz deploy/server-setup.sh ubuntu@SERVER_IP:~
+   ```
+4. **Prepare the server** (once): `bash server-setup.sh` installs updates and Docker, opens ports 80 and 443 in the server's own firewall, turns on automatic security updates and disables SSH passwords. Log out and back in afterwards.
+5. **Configure:** `mkdir -p leadflow-ai && tar -xzf leadflow.tar.gz -C leadflow-ai && cd leadflow-ai`, then copy `deploy/production.env.example` to `deploy/production.env` and set `LEADFLOW_DOMAIN`.
+6. **Start:** `docker compose up -d --build` (run it inside `tmux` so a dropped SSH connection doesn't stop the build), then `docker compose ps` until every service is up. Caddy fetches the HTTPS certificate on its own.
+7. **Create your admin account:** `docker compose exec api python -m leadflow_ai.manage_users create yourname --role admin`.
+
+**Update:** repeat step 3, extract over the folder, and run `docker compose up -d --build`. Your settings and data are not in the archive, so they are kept.
+
+**Free-tier notes (Oracle):** Always Free servers don't expire, but Oracle may reclaim one that stays below 20% CPU, network *and* memory use for 7 days. A demo with little traffic sits there, so size the server so the app's resident memory stays above 20% (1 OCPU with 2 GB plus a 2 GB swap file works) and avoid anything not labelled *Always Free-eligible*.
 
 ## Privacy
 
