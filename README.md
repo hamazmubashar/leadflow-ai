@@ -123,6 +123,7 @@ Settings come from environment variables or from `.env` in the directory you run
 | `LEADFLOW_LLM_URL` | no | Local Ollama URL, e.g. `http://127.0.0.1:11434`. Unset or empty means AI-assisted drafts are **off**. Only `localhost`, `127.0.0.1` or `::1` over `http://` are accepted; anything else stops startup (see [AI-assisted drafts](#ai-assisted-drafts-m9-optional)) |
 | `LEADFLOW_LLM_MODEL` | no | Model name in Ollama (default `qwen2.5:3b`) |
 | `LEADFLOW_LLM_TIMEOUT_SECONDS` | no | How long to wait for one generation, 5–300 (default `120`) |
+| `LEADFLOW_DEVELOPER_URL` | no | Dashboard only: an `https://` link for the "Built by" credit on the sign-in page. Unset or empty shows the credit as plain text |
 
 - **Relative path:** the default path `./leadflow.db` is relative to the directory you run commands from. Run `alembic` and `uvicorn` from the same place, normally the project root.
 - **Accepted URLs:** only local SQLite file URLs (`sqlite:///relative.db` or `sqlite:////absolute/path.db`). Other databases, in-memory databases, hosts, credentials, and query parameters are rejected at startup.

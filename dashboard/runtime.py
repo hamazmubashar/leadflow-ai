@@ -84,6 +84,18 @@ def demo_info() -> DemoInfo | None:
         return None
 
 
+@st.cache_resource(show_spinner=False)
+def developer_url() -> str | None:
+    """The optional link for the sign-in page's developer credit (E1), or None.
+
+    None too when the settings can't load: the pages report that problem themselves.
+    """
+    try:
+        return load_settings().developer_url
+    except ConfigError:
+        return None
+
+
 def sign_out() -> None:
     """End the session on the API (best effort) and forget the token in this tab.
 

@@ -83,17 +83,36 @@ def visitor_address(forwarded_for: str | None) -> str | None:
 def begin(state: State, signed_in: SignedIn) -> None:
     state[AUTH_KEY] = signed_in
     state.pop(NOTICE_KEY, None)
+    close_recovery(state)
 
 
 def end(state: State, notice: str) -> None:
     """Forget the token and leave a one-time message for the sign-in page."""
     state.pop(AUTH_KEY, None)
     state[NOTICE_KEY] = notice
+    close_recovery(state)  # the message belongs on the sign-in form, not the help panel
 
 
 def take_notice(state: State) -> str | None:
     notice = state.pop(NOTICE_KEY, None)
     return notice if isinstance(notice, str) else None
+
+
+# --- "Forgot password?" panel on the sign-in page (E1) ------------------------------------
+
+RECOVERY_KEY = "auth.recovery"
+
+
+def open_recovery(state: State) -> None:
+    state[RECOVERY_KEY] = True
+
+
+def close_recovery(state: State) -> None:
+    state.pop(RECOVERY_KEY, None)
+
+
+def recovery_open(state: State) -> bool:
+    return state.get(RECOVERY_KEY) is True
 
 
 # --- sign-in lockout shown on the sign-in page (the API enforces it) ----------------------

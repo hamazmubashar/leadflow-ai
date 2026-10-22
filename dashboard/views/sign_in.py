@@ -12,6 +12,10 @@ comes back.
 
 Layout: brand panel left (about 55%) and the sign-in card right on desktop; one column
 on narrow screens. All styling is scoped to this page.
+
+E1: a "Forgot password?" link under the card opens a help panel in its place (accounts
+are administrator-made, so recovery is administrator-assisted; nothing is asked for or
+looked up), and a quiet developer credit sits at the bottom of the page.
 """
 
 import html
@@ -23,7 +27,8 @@ from dashboard import session
 from dashboard.api_client import ApiError
 from dashboard.config import ConfigError
 from dashboard.models import DemoInfo
-from dashboard.runtime import demo_info, sign_in, start_demo
+from dashboard.runtime import demo_info, developer_url, sign_in, start_demo
+from dashboard.sign_in_content import credit_html, recovery_html
 
 PAGE_BG = "#08172C"
 CARD_BG = "#0C2038"
@@ -45,8 +50,10 @@ _CSS = f"""
   [data-testid="stHeader"] {{ background: transparent; }}
   [data-testid="stSidebar"], [data-testid="stSidebarCollapsedControl"] {{ display: none; }}
   [data-testid="stMainBlockContainer"] {{
-    max-width: 1240px; padding: max(3rem, calc(50vh - 360px)) 3rem 3rem;
+    max-width: 1240px; padding: max(2.5rem, calc(50vh - 380px)) 3rem 2rem;
   }}
+  .lf-sr {{ position: absolute; width: 1px; height: 1px; overflow: hidden;
+    clip: rect(0 0 0 0); white-space: nowrap; }}
 
   /* brand panel */
   .lf-brand-panel {{ padding: 0 2rem 0 0; }}
@@ -59,7 +66,7 @@ _CSS = f"""
   .lf-logo .lf-name {{ font-size: 1.5rem; font-weight: 700; color: {TEXT}; }}
   .lf-logo .lf-name span {{ color: {ORANGE}; }}
   .lf-headline {{
-    font-size: 3rem; line-height: 1.12; font-weight: 800; color: {TEXT};
+    font-size: clamp(2.25rem, 3.6vw, 3rem); line-height: 1.12; font-weight: 800; color: {TEXT};
     letter-spacing: -0.02em; margin: 0 0 1.25rem; max-width: 34rem;
   }}
   .lf-headline em {{ font-style: normal; color: {ORANGE}; }}
@@ -86,7 +93,7 @@ _CSS = f"""
   }}
   .lf-card-head .lf-h1 {{ font-size: 1.85rem; font-weight: 700; color: {TEXT};
     letter-spacing: -0.01em; margin: 0 0 0.4rem; }}
-  .lf-card-head p {{ color: {MUTED}; font-size: 1rem; margin: 0 0 1.75rem; }}
+  .lf-card-head p {{ color: {MUTED}; font-size: 1rem; line-height: 1.5; margin: 0 0 1.5rem; }}
   [data-testid="stForm"] label p {{ color: {TEXT}; font-size: 0.95rem; font-weight: 600; }}
   [data-testid="stForm"] [data-baseweb="input"] {{
     min-height: 52px; background: {INPUT_BG}; border: 1px solid {LINE}; border-radius: 12px;
@@ -98,13 +105,14 @@ _CSS = f"""
   [data-testid="stForm"] [data-baseweb="input"]:focus-within {{
     border-color: {ORANGE}; box-shadow: 0 0 0 3px rgba(255, 116, 23, 0.30);
   }}
-  [data-testid="stForm"] [data-testid="stTextInput"] {{ margin-bottom: 0.35rem; }}
+  [data-testid="stForm"] [data-testid="stTextInput"] {{ margin-bottom: 0.5rem; }}
   [data-testid="stFormSubmitButton"], .stFormSubmitButton,
   [data-testid="stFormSubmitButton"] > div {{ width: 100%; }}
   [data-testid="stFormSubmitButton"] button {{
     width: 100%; min-height: 52px; margin-top: 0.75rem; border-radius: 12px; border: 0;
     background: {ORANGE}; color: #FFFFFF; font-weight: 700; font-size: 1.02rem;
   }}
+  [data-testid="stFormSubmitButton"] button p {{ font-size: 1.02rem; font-weight: 700; }}
   [data-testid="stFormSubmitButton"] button:hover {{ background: {ORANGE_HOVER}; color: #FFF; }}
   [data-testid="stFormSubmitButton"] button:focus-visible {{
     outline: 3px solid rgba(255, 116, 23, 0.60); outline-offset: 3px;
@@ -129,6 +137,50 @@ _CSS = f"""
   .lf-foot {{ color: {MUTED}; font-size: 0.85rem; text-align: center; max-width: 480px;
     margin: 1.25rem 0 0 auto; }}
 
+  /* "Forgot password?" link and the help panel (E1) */
+  .st-key-recovery_open {{ max-width: 480px; width: 100%; margin: -0.35rem 0 0 auto;
+    display: flex; justify-content: flex-end; }}
+  .st-key-recovery_open [data-testid="stButton"] {{ margin: 0; width: auto; }}
+  .st-key-recovery_open [data-testid="stButton"] button {{
+    width: auto; min-height: 0; padding: 0.2rem 0.35rem; border: 0; border-radius: 6px;
+    background: transparent; color: {ORANGE};
+  }}
+  .st-key-recovery_open [data-testid="stButton"] button p {{ font-size: 0.92rem;
+    font-weight: 600; }}
+  .st-key-recovery_open [data-testid="stButton"] button:hover {{ background: transparent;
+    color: {ORANGE_HOVER}; text-decoration: underline; }}
+  .lf-recovery {{
+    max-width: 480px; margin-left: auto; background: {CARD_BG}; border: 1px solid {LINE};
+    border-radius: 20px; padding: 2.5rem 2.25rem 2rem; color: {MUTED}; line-height: 1.6;
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.40), 0 1px 0 rgba(255, 255, 255, 0.04) inset;
+  }}
+  .lf-recovery .lf-h1 {{ font-size: 1.85rem; font-weight: 700; color: {TEXT};
+    letter-spacing: -0.01em; margin: 0 0 0.6rem; }}
+  .lf-recovery p {{ margin: 0 0 1.1rem; font-size: 0.98rem; }}
+  .lf-recovery b {{ color: {TEXT}; font-weight: 600; }}
+  .lf-steps {{ margin: 0 0 1.1rem; padding-left: 1.25rem; display: grid; gap: 0.8rem; }}
+  .lf-steps li {{ padding-left: 0.25rem; font-size: 0.95rem; }}
+  .lf-steps li::marker {{ color: {ORANGE}; font-weight: 700; }}
+  .lf-steps code {{ display: block; margin: 0.45rem 0 0.3rem; padding: 0.55rem 0.7rem;
+    background: {INPUT_BG}; border: 1px solid {LINE}; border-radius: 8px; color: {TEXT};
+    font-size: 0.8rem; white-space: normal; }}
+  .lf-steps code .lf-nw {{ white-space: nowrap; }}
+  .lf-steps small code {{ display: inline; margin: 0; padding: 0.05rem 0.3rem; }}
+  .lf-steps small {{ display: block; font-size: 0.85rem; }}
+  .lf-recovery .lf-recovery-note {{ font-size: 0.9rem; margin: 0 0 0.6rem;
+    padding-top: 0.9rem; border-top: 1px solid {LINE}; }}
+  .lf-recovery .lf-recovery-note + .lf-recovery-note {{ border-top: 0; padding-top: 0; }}
+  .st-key-recovery_back {{ max-width: 480px; margin: 1rem 0 0 auto; }}
+
+  /* developer credit (E1) */
+  .lf-credit {{ color: #7F93AD; font-size: 0.82rem; text-align: center;
+    margin: 2.75rem 0 0; padding-top: 1.25rem; border-top: 1px solid {LINE}; }}
+  .lf-credit a {{ color: {MUTED}; font-weight: 600; text-decoration: none;
+    border-radius: 4px; }}
+  .lf-credit a:hover {{ color: {ORANGE}; text-decoration: underline; }}
+  .lf-credit a:focus-visible {{ outline: 2px solid rgba(255, 116, 23, 0.70);
+    outline-offset: 2px; }}
+
   /* public demo (M12) */
   .lf-or {{ display: flex; align-items: center; gap: 0.9rem; max-width: 480px;
     margin: 1.5rem 0 1rem auto; color: {MUTED}; font-size: 0.85rem; }}
@@ -138,9 +190,11 @@ _CSS = f"""
     width: 100%; min-height: 52px; border-radius: 12px; background: transparent;
     border: 1px solid rgba(255, 116, 23, 0.65); color: {TEXT}; font-weight: 600;
   }}
+  [data-testid="stButton"] button p {{ font-size: 0.98rem; font-weight: 600; }}
   [data-testid="stButton"] button:hover {{ border-color: {ORANGE}; color: {ORANGE};
     background: rgba(255, 116, 23, 0.08); }}
-  [data-testid="stButton"] button:focus-visible {{
+  [data-testid="stButton"] button:focus-visible,
+  .st-key-recovery_open button:focus-visible {{
     outline: 3px solid rgba(255, 116, 23, 0.60); outline-offset: 3px;
   }}
   .lf-demo-note {{ color: {MUTED}; font-size: 0.88rem; line-height: 1.55; max-width: 480px;
@@ -151,12 +205,14 @@ _CSS = f"""
     [data-testid="stMainBlockContainer"] {{ padding: 2rem 1.25rem; }}
     .lf-brand-panel {{ padding: 0; }}
     .lf-logo {{ margin-bottom: 1.5rem; }}
-    .lf-headline {{ font-size: 2rem; }}
+    .lf-headline {{ font-size: 1.9rem; }}
     .lf-lede {{ font-size: 1rem; margin-bottom: 1.25rem; }}
     .lf-benefits, .lf-pipeline {{ display: none; }}
     [data-testid="stForm"], .lf-alert, .lf-foot, .lf-or, .lf-demo-note,
-    [data-testid="stButton"] {{ max-width: none; margin-left: 0; }}
-    [data-testid="stForm"] {{ padding: 1.75rem 1.25rem 1.5rem; }}
+    [data-testid="stButton"], .lf-recovery, .st-key-recovery_open,
+    .st-key-recovery_back {{ max-width: none; margin-left: 0; }}
+    [data-testid="stForm"], .lf-recovery {{ padding: 1.75rem 1.25rem 1.5rem; }}
+    .lf-credit {{ margin-top: 2rem; }}
   }}
 </style>
 """
@@ -259,43 +315,64 @@ def _alert(kind: str, message: str, hint: str = "", *, icon: str = "") -> None:
 
 def render() -> None:
     st.markdown(_CSS, unsafe_allow_html=True)
-    locked_for = session.sign_in_locked_for(st.session_state, now=time.time())
     brand_col, form_col = st.columns([1.2, 1], gap="large", vertical_alignment="center")
     with brand_col:
         _brand_panel()
     with form_col:
-        with st.form("sign_in", clear_on_submit=True, border=False):
-            st.markdown(
-                '<div class="lf-card-head"><div class="lf-h1" role="heading" aria-level="1">'
-                "Welcome back</div><p>Sign in to your LeadFlow AI workspace.</p></div>",
-                unsafe_allow_html=True,
-            )
-            username = st.text_input(
-                "Username",
-                max_chars=64,
-                autocomplete="username",
-                placeholder="Enter your username",
-                disabled=locked_for is not None,
-            )
-            password = st.text_input(
-                "Password",
-                type="password",
-                max_chars=128,
-                autocomplete="current-password",
-                placeholder="Enter your password",
-                disabled=locked_for is not None,
-            )
-            submitted = st.form_submit_button(
-                "Sign in", type="primary", disabled=locked_for is not None, width="stretch"
-            )
-        feedback = st.container()
-        info = demo_info()
-        if info is not None:
-            _demo_offer(info)
+        if session.recovery_open(st.session_state):
+            _recovery()
+        else:
+            _sign_in()
+    st.markdown(credit_html(developer_url()), unsafe_allow_html=True)
+
+
+def _recovery() -> None:
+    """Password help (E1): instructions only, so nothing about any account is revealed."""
+    st.markdown(recovery_html(demo_available=demo_info() is not None), unsafe_allow_html=True)
+    if st.button(
+        "Back to sign in", icon=":material/arrow_back:", key="recovery_back", width="stretch"
+    ):
+        session.close_recovery(st.session_state)
+        st.rerun()
+
+
+def _sign_in() -> None:
+    locked_for = session.sign_in_locked_for(st.session_state, now=time.time())
+    with st.form("sign_in", clear_on_submit=True, border=False):
         st.markdown(
-            '<div class="lf-foot">Sessions last 8 hours · Refreshing the page signs you out</div>',
+            '<div class="lf-card-head"><div class="lf-h1" role="heading" aria-level="1">'
+            "Welcome back</div><p>Sign in to your LeadFlow AI workspace.</p></div>",
             unsafe_allow_html=True,
         )
+        username = st.text_input(
+            "Username",
+            max_chars=64,
+            autocomplete="username",
+            placeholder="Enter your username",
+            disabled=locked_for is not None,
+        )
+        password = st.text_input(
+            "Password",
+            type="password",
+            max_chars=128,
+            autocomplete="current-password",
+            placeholder="Enter your password",
+            disabled=locked_for is not None,
+        )
+        submitted = st.form_submit_button(
+            "Sign in", type="primary", disabled=locked_for is not None, width="stretch"
+        )
+    if st.button("Forgot password?", key="recovery_open", type="tertiary"):
+        session.open_recovery(st.session_state)
+        st.rerun()
+    feedback = st.container()
+    info = demo_info()
+    if info is not None:
+        _demo_offer(info)
+    st.markdown(
+        '<div class="lf-foot">Sessions last 8 hours · Refreshing the page signs you out</div>',
+        unsafe_allow_html=True,
+    )
     with feedback:
         if locked_for is not None:
             _countdown()

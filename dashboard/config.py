@@ -13,6 +13,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_API_URL = "http://127.0.0.1:8000"
 _LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+MAX_DEVELOPER_URL = 300
 
 
 class DashboardSettings(BaseSettings):
@@ -37,6 +38,11 @@ class DashboardSettings(BaseSettings):
     # X-Forwarded-For header Caddy sets) to the API, so its limits apply per visitor.
     # Never enable this without a proxy that overwrites the header: visitors could fake it.
     trust_proxy: bool = Field(default=False, description="Forward visitor addresses to the API.")
+    # E1: optional link for the "Built by" credit on the sign-in page. Unset or empty
+    # shows the credit as plain text; the dashboard never makes up a link.
+    developer_url: str | None = Field(
+        default=None, description="Optional https:// link for the developer credit."
+    )
 
     @field_validator("api_url")
     @classmethod
@@ -55,6 +61,23 @@ class DashboardSettings(BaseSettings):
                 " use https://"
             )
         return value.strip().rstrip("/")
+
+    @field_validator("developer_url")
+    @classmethod
+    def _check_developer_url(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return None
+        url = value.strip()
+        parts = urlsplit(url)
+        if parts.scheme != "https" or not parts.hostname:
+            raise ValueError("developer_url must be an https:// URL with a host")
+        if parts.username or parts.password:
+            raise ValueError("developer_url must not include credentials")
+        if len(url) > MAX_DEVELOPER_URL or any(c.isspace() or not c.isprintable() for c in url):
+            raise ValueError(
+                f"developer_url must be at most {MAX_DEVELOPER_URL} characters, with no spaces"
+            )
+        return url
 
     @field_validator("operator_token")
     @classmethod

@@ -39,6 +39,7 @@ services:
     pull_policy: never         # built locally by the api service, never downloaded
     depends_on:
       api: {condition: service_healthy}
+    env_file: deploy/production.env   # for LEADFLOW_DEVELOPER_URL (the credit link)
     environment:
       LEADFLOW_API_URL: http://api:8000
       LEADFLOW_TRUST_PROXY: "true"

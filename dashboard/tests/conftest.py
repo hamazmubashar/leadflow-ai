@@ -11,7 +11,13 @@ def isolated_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Ite
     Settings read .env from the working directory, so this keeps the real
     project .env (and its token) out of every test.
     """
-    for name in ("API_URL", "OPERATOR_TOKEN", "REQUEST_TIMEOUT_SECONDS", "DATABASE_URL"):
+    for name in (
+        "API_URL",
+        "OPERATOR_TOKEN",
+        "REQUEST_TIMEOUT_SECONDS",
+        "DATABASE_URL",
+        "DEVELOPER_URL",
+    ):
         monkeypatch.delenv(f"LEADFLOW_{name}", raising=False)
     monkeypatch.chdir(tmp_path)
     yield tmp_path
