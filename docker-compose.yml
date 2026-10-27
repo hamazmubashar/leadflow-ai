@@ -97,6 +97,7 @@ networks:
   # external (see deploy/sites/README.md). Only Caddy is attached on LeadFlow's side.
   shared-edge:
     name: shared-edge
+    internal: true   # no internet egress for apps on it; Caddy still has its default network
 
 volumes:
   leadflow-data:

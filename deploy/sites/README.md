@@ -13,4 +13,5 @@ To add an app:
    `deploy/production.env`, and run `docker compose up -d caddy`.
 
 Each site gets its own automatic HTTPS certificate and the same security headers as LeadFlow.
-Plain Caddy has no per-visitor rate limiting; apps that need it must enforce it themselves.
+The `shared-edge` network is internal: apps on it have no internet egress (Caddy keeps its
+own). Plain Caddy has no per-visitor rate limiting; apps that need it must enforce it themselves.

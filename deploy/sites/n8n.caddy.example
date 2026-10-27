@@ -1,0 +1,21 @@
+# FlowPilot's n8n editor (joins the shared-edge network as flowpilot-n8n). Copy to n8n.caddy
+# and set FLOWPILOT_N8N_DOMAIN in deploy/production.env. Sign in with n8n's own owner account
+# and turn on two-factor authentication in its settings.
+{$FLOWPILOT_N8N_DOMAIN} {
+	encode zstd gzip
+	# No content security policy here: n8n's editor needs its own (inline code, web workers).
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+	request_body {
+		max_size 5MB
+	}
+	# Workflows are triggered from inside Docker only; no webhook or form path is public.
+	@hooks path /webhook/* /webhook-test/* /webhook-waiting/* /form/* /form-test/* /form-waiting/*
+	respond @hooks 404
+	reverse_proxy flowpilot-n8n:5678
+}
