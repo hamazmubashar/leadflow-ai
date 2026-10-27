@@ -702,6 +702,8 @@ The whole stack runs with Docker Compose: `api`, `dashboard`, `backup` (nightly 
 6. **Start:** `docker compose up -d --build` (run it inside `tmux` so a dropped SSH connection doesn't stop the build), then `docker compose ps` until every service is up. Caddy fetches the HTTPS certificate on its own.
 7. **Create your admin account:** `docker compose exec api python -m leadflow_ai.manage_users create yourname --role admin`.
 
+**Another app on the same server:** Caddy can publish it too, with its own domain and certificate; see `deploy/sites/README.md`.
+
 **Update:** repeat step 3, extract over the folder, and run `docker compose up -d --build`. Your settings and data are not in the archive, so they are kept.
 
 **Free-tier notes (Oracle):** Always Free servers don't expire, but Oracle may reclaim one that stays below 20% CPU, network *and* memory use for 7 days. A demo with little traffic sits there, so size the server so the app's resident memory stays above 20% (1 OCPU with 2 GB plus a 2 GB swap file works) and avoid anything not labelled *Always Free-eligible*.

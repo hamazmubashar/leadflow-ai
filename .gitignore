@@ -47,3 +47,5 @@ demo-sandboxes/
 # M12 deployment: secrets and local backups
 deploy/production.env
 backups/
+# server-specific extra sites (examples are committed)
+deploy/sites/*.caddy

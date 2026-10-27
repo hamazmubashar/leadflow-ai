@@ -1,0 +1,10 @@
+# FlowPilot AI public demo (its console joins the shared-edge network as flowpilot-console).
+# Copy to flowpilot.caddy and set FLOWPILOT_DOMAIN in deploy/production.env.
+{$FLOWPILOT_DOMAIN} {
+	encode zstd gzip
+	import security_headers
+	request_body {
+		max_size 1MB
+	}
+	reverse_proxy flowpilot-console:8501
+}

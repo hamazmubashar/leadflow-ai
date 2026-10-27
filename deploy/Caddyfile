@@ -1,8 +1,7 @@
 # LeadFlow AI (M12). Caddy gets and renews the HTTPS certificate for LEADFLOW_DOMAIN
 # automatically (ports 80 and 443 must be open). With "localhost" it uses a local CA.
-{$LEADFLOW_DOMAIN} {
-	encode zstd gzip
-
+# Security headers shared by every site served here (LeadFlow and any extra sites below).
+(security_headers) {
 	header {
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		X-Content-Type-Options "nosniff"
@@ -12,8 +11,17 @@
 		Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' wss: https:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 		-Server
 	}
+}
+
+{$LEADFLOW_DOMAIN} {
+	encode zstd gzip
+	import security_headers
 
 	# Only the dashboard is public. The API is reached by the dashboard internally.
 	# Caddy replaces any X-Forwarded-For a visitor sends with their real address.
 	reverse_proxy dashboard:8501
 }
+
+# Extra sites on the same server (e.g. FlowPilot AI): one *.caddy file each in deploy/sites/.
+# No matching file means no extra site. See deploy/sites/README.md.
+import /etc/caddy/sites/*.caddy

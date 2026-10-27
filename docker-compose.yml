@@ -79,14 +79,24 @@ services:
     ports:
       - "80:80"
       - "443:443"
-    env_file: deploy/production.env   # for LEADFLOW_DOMAIN
+    env_file: deploy/production.env   # for LEADFLOW_DOMAIN (and FLOWPILOT_DOMAIN, if used)
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./deploy/sites:/etc/caddy/sites:ro
       - caddy-data:/data
       - caddy-config:/config
+    networks:
+      - default
+      - shared-edge   # other apps on this server join it so Caddy can reach them
     logging:
       driver: json-file
       options: {max-size: "10m", max-file: "3"}
+
+networks:
+  # Created by this project with a fixed name; another app's compose file joins it as
+  # external (see deploy/sites/README.md). Only Caddy is attached on LeadFlow's side.
+  shared-edge:
+    name: shared-edge
 
 volumes:
   leadflow-data:
